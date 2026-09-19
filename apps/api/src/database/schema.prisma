@@ -1,0 +1,120 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IndiaAdministrativeKind {
+  STATE
+  UNION_TERRITORY
+}
+
+enum IndiaPlaceKind {
+  CITY
+  TOWN
+  URBAN_LOCAL_BODY
+  OTHER
+}
+
+model IndiaState {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  lgdCode             Int                     @unique @map("lgd_code")
+  name                String
+  localName           String?                 @map("local_name")
+  kind                IndiaAdministrativeKind
+  census2011Code      String?                 @map("census_2011_code")
+  lastSourceUpdatedAt DateTime?               @map("last_source_updated_at") @db.Date
+  isActive            Boolean                 @default(true) @map("is_active")
+  createdAt           DateTime                @default(now()) @map("created_at")
+  updatedAt           DateTime                @updatedAt @map("updated_at")
+  districts           IndiaDistrict[]
+
+  @@index([name])
+  @@index([kind, isActive])
+  @@map("location_states")
+}
+
+model IndiaDistrict {
+  id                  String             @id @default(uuid()) @db.Uuid
+  lgdCode             Int                @unique @map("lgd_code")
+  stateId             String             @map("state_id") @db.Uuid
+  name                String
+  localName           String?            @map("local_name")
+  census2011Code      String?            @map("census_2011_code")
+  lastSourceUpdatedAt DateTime?          @map("last_source_updated_at") @db.Date
+  isActive            Boolean            @default(true) @map("is_active")
+  createdAt           DateTime           @default(now()) @map("created_at")
+  updatedAt           DateTime           @updatedAt @map("updated_at")
+  state               IndiaState         @relation(fields: [stateId], references: [id], onDelete: Restrict)
+  subdistricts        IndiaSubdistrict[]
+  places              IndiaPlace[]
+
+  @@index([stateId, name])
+  @@index([name])
+  @@map("location_districts")
+}
+
+model IndiaSubdistrict {
+  id                  String        @id @default(uuid()) @db.Uuid
+  lgdCode             Int           @unique @map("lgd_code")
+  districtId          String        @map("district_id") @db.Uuid
+  name                String
+  localName           String?       @map("local_name")
+  census2011Code      String?       @map("census_2011_code")
+  lastSourceUpdatedAt DateTime?     @map("last_source_updated_at") @db.Date
+  isActive            Boolean       @default(true) @map("is_active")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
+  district            IndiaDistrict @relation(fields: [districtId], references: [id], onDelete: Restrict)
+  places              IndiaPlace[]
+
+  @@index([districtId, name])
+  @@index([name])
+  @@map("location_subdistricts")
+}
+
+model IndiaPlace {
+  id              String            @id @default(uuid()) @db.Uuid
+  sourceDataset   String            @map("source_dataset")
+  sourceCode      String            @map("source_code")
+  districtId      String            @map("district_id") @db.Uuid
+  subdistrictId   String?           @map("subdistrict_id") @db.Uuid
+  name            String
+  localName       String?           @map("local_name")
+  kind            IndiaPlaceKind
+  sourceTypeLabel String?           @map("source_type_label")
+  sourceUpdatedAt DateTime?         @map("source_updated_at") @db.Date
+  isActive        Boolean           @default(true) @map("is_active")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+  district        IndiaDistrict     @relation(fields: [districtId], references: [id], onDelete: Restrict)
+  subdistrict     IndiaSubdistrict? @relation(fields: [subdistrictId], references: [id], onDelete: Restrict)
+
+  @@unique([sourceDataset, sourceCode])
+  @@index([districtId, name])
+  @@index([subdistrictId, name])
+  @@index([name])
+  @@index([kind, isActive])
+  @@map("location_places")
+}
+
+model LocationImportRun {
+  id                   String    @id @default(uuid()) @db.Uuid
+  source               String
+  sourceUpdatedAt      DateTime? @map("source_updated_at")
+  status               String
+  statesInserted       Int       @default(0) @map("states_inserted")
+  districtsInserted    Int       @default(0) @map("districts_inserted")
+  subdistrictsInserted Int       @default(0) @map("subdistricts_inserted")
+  placesInserted       Int       @default(0) @map("places_inserted")
+  skippedRows          Int       @default(0) @map("skipped_rows")
+  details              Json?
+  startedAt            DateTime  @default(now()) @map("started_at")
+  completedAt          DateTime? @map("completed_at")
+
+  @@index([source, startedAt])
+  @@map("location_import_runs")
+}

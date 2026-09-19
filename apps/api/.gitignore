@@ -1,0 +1,4 @@
+/data/lgd/
+.env
+.env.*
+!.env.example

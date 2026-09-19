@@ -1,0 +1,26 @@
+{
+  "name": "@brand-deals/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "locations:sync": "tsx scripts/sync-lgd-locations.ts",
+    "locations:verify": "tsx scripts/sync-lgd-locations.ts --verify-only",
+    "locations:export-mobile": "tsx scripts/export-mobile-india-locations.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "prisma": {
+    "schema": "src/database/schema.prisma"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prisma": "^6.16.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

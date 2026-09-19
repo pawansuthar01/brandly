@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Brandly",
+    "slug": "brandly-marketplace",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "com.brandly.marketplace"
+    },
+    "ios": {
+      "bundleIdentifier": "com.brandly.marketplace"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "expo-image"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "e195626d-8288-466c-b1c7-4ad91bd3365f"
+      }
+    }
+  }
+}
