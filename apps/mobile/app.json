@@ -2,18 +2,88 @@
   "expo": {
     "name": "Brandly",
     "slug": "brandly-marketplace",
-    "version": "0.1.0",
+    "version": "0.2.31",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "android": {
-      "package": "com.brandly.marketplace"
+      "package": "com.brandly.marketplace",
+      "versionCode": 46,
+      "permissions": [
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
+        "REQUEST_INSTALL_PACKAGES"
+      ]
     },
     "ios": {
-      "bundleIdentifier": "com.brandly.marketplace"
+      "bundleIdentifier": "com.brandly.marketplace",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "plugins": [
       "expo-status-bar",
-      "expo-image"
+      "expo-image",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Brandly to access your photos for profile and campaign media."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": [
+            "./assets/sounds/soft_chime.wav",
+            "./assets/sounds/soft_chime_alarm.wav",
+            "./assets/sounds/bright_bell.wav",
+            "./assets/sounds/bright_bell_alarm.wav",
+            "./assets/sounds/focus_pulse.wav",
+            "./assets/sounds/focus_pulse_alarm.wav",
+            "./assets/sounds/morning_rise.wav",
+            "./assets/sounds/morning_rise_alarm.wav",
+            "./assets/sounds/warm_double.wav",
+            "./assets/sounds/warm_double_alarm.wav",
+            "./assets/sounds/clear_triangle.wav",
+            "./assets/sounds/clear_triangle_alarm.wav",
+            "./assets/sounds/gentle_wave.wav",
+            "./assets/sounds/gentle_wave_alarm.wav",
+            "./assets/sounds/short_alert.wav",
+            "./assets/sounds/short_alert_alarm.wav",
+            "./assets/sounds/deep_note.wav",
+            "./assets/sounds/deep_note_alarm.wav",
+            "./assets/sounds/sparkle_sequence.wav",
+            "./assets/sounds/sparkle_sequence_alarm.wav",
+            "./assets/sounds/akx_alarmed.wav",
+            "./assets/sounds/akx_alarmed_alarm.wav",
+            "./assets/sounds/akx_beeper.wav",
+            "./assets/sounds/akx_beeper_alarm.wav",
+            "./assets/sounds/akx_belligerent.wav",
+            "./assets/sounds/akx_belligerent_alarm.wav",
+            "./assets/sounds/akx_calm.wav",
+            "./assets/sounds/akx_calm_alarm.wav",
+            "./assets/sounds/akx_chord.wav",
+            "./assets/sounds/akx_chord_alarm.wav",
+            "./assets/sounds/akx_chord2.wav",
+            "./assets/sounds/akx_chord2_alarm.wav",
+            "./assets/sounds/akx_cloud.wav",
+            "./assets/sounds/akx_cloud_alarm.wav",
+            "./assets/sounds/akx_glass.wav",
+            "./assets/sounds/akx_glass_alarm.wav",
+            "./assets/sounds/akx_glisten.wav",
+            "./assets/sounds/akx_glisten_alarm.wav",
+            "./assets/sounds/akx_polite.wav",
+            "./assets/sounds/akx_polite_alarm.wav",
+            "./assets/sounds/akx_sharp.wav",
+            "./assets/sounds/akx_sharp_alarm.wav",
+            "./assets/sounds/akx_whistleronic.wav",
+            "./assets/sounds/akx_whistleronic_alarm.wav"
+          ]
+        }
+      ],
+      "expo-secure-store",
+      "expo-audio",
+      "expo-video",
+      "@react-native-community/datetimepicker"
     ],
     "extra": {
       "eas": {

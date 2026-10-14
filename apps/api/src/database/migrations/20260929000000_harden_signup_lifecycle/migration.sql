@@ -1,0 +1,4 @@
+ALTER TYPE "UserStatus" ADD VALUE 'PENDING_VERIFICATION';
+
+ALTER TABLE "user_profiles"
+ADD COLUMN "onboarding_step" TEXT NOT NULL DEFAULT 'profile';

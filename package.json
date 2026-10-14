@@ -2,7 +2,12 @@
   "name": "brand-deals-marketplace",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@10.0.0",
+  "packageManager": "npm@11.12.1",
+  "workspaces": [
+    "apps/api",
+    "apps/mobile",
+    "apps/admin"
+  ],
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",

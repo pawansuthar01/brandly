@@ -1,430 +1,181 @@
-import {
+import type {
+  BrandBrief,
   Campaign,
+  ContentIdeaAttachment,
+  ContentIdea,
   Conversation,
+  CreatorReview,
+  CreatorWorkHistory,
+  DemoAttachment,
   DemoProposal,
-  Influencer,
+  MarketplaceApplication,
+  MarketplaceBlock,
+  MarketplaceConversation,
+  ProductionProject,
+  ProductionStage,
+  ProductionStageDataByStage,
+  PublicCreatorProfile,
+  WorkflowStep,
 } from "../types/marketplace";
+import { PRODUCTION_STAGES } from "../types/marketplace";
 
 export type HomePromo = {
   id: string;
   eyebrow: string;
   title?: string;
   description?: string;
-  cta?: {
-    kind: "button" | "link" | "icon";
-    label?: string;
-    position: "bottomLeft" | "bottomRight";
-  };
+  cta?: { kind: "button" | "link" | "icon"; label?: string; position: "bottomLeft" | "bottomRight" };
   action: "discover" | "campaigns";
-  icon:
-    | "search-outline"
-    | "briefcase-outline"
-    | "bookmark-outline"
-    | "location-outline"
-    | "sparkles-outline";
+  icon: "search-outline" | "briefcase-outline" | "bookmark-outline" | "location-outline" | "bulb-outline";
   background: "primary" | "accent" | "surfaceMuted";
   layout: "text" | "image" | "split" | "imageOnly";
   audience: "Brand" | "Influencer" | "Both";
   media?: { type: "image"; uri: string };
 };
 
-// This mirrors the future admin-managed Home configuration API. For the UI demo,
-// it remains local data; the Home screen never owns hard-coded marketing content.
+const DEMO_REFERENCE_DATE = new Date(2026, 8, 24, 10, 0, 0);
+const pad = (value: number) => String(value).padStart(2, "0");
+const dateKey = (offset: number) => {
+  const date = new Date(DEMO_REFERENCE_DATE);
+  date.setDate(date.getDate() + offset);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+};
+const isoDate = (offset: number, hour = 10) => {
+  const date = new Date(DEMO_REFERENCE_DATE);
+  date.setDate(date.getDate() + offset);
+  date.setHours(hour, 0, 0, 0);
+  return date.toISOString();
+};
+const LONG_COPY = "This intentionally detailed demo record is long enough to exercise vertical scrolling, natural wrapping, expandable sections, and mobile keyboard behavior. It includes practical context, audience considerations, production notes, review guidance, and handoff details so the interface is tested with real content rather than short placeholder sentences. The information should remain readable without being truncated or forcing a horizontal layout.\n\nThe team can use this section to validate line breaks, links, attachments, and navigation back to the parent record. The content is deliberately repeated with different wording across several entities so each screen can be tested independently.";
+const LONG_SCRIPT = "Hook: Start with the smallest change that makes the day feel lighter.\n\nScene one opens on a busy morning, then moves through three practical choices with natural voiceover. The creator explains why each choice matters, shows the product in use, and leaves enough pause for captions. Scene two introduces a personal example, while scene three closes with a clear call to action and a soft reminder that the audience can adapt the routine to their own schedule.\n\nProduction note: keep the pacing calm, preserve room for subtitles, and capture alternate cutdowns for vertical placements. The final edit should feel useful rather than overly polished.";
+const imageAttachment = (id: string, name: string, uri: string): ContentIdeaAttachment => ({ id, name, type: "image", uri });
+const videoAttachment = (id: string, name: string, uri: string): ContentIdeaAttachment => ({ id, name, type: "video", uri });
+const fileAttachment = (id: string, name: string, uri: string): ContentIdeaAttachment => ({ id, name, type: "file", uri });
+const ideaImageAttachment = (id: string, name: string, uri: string): ContentIdeaAttachment => ({ id, name, type: "image", uri });
+
+const work = (id: string, brandName: string, brandInitials: string, title: string, summary: string, platform: CreatorWorkHistory["platform"], media: DemoAttachment[], options: Partial<CreatorWorkHistory> = {}): CreatorWorkHistory => ({
+  id, brandName, brandInitials, title, deliverables: options.deliverables ?? "1 short video + 3 story frames", period: options.period ?? "Aug 2026", summary, category: options.category ?? "Lifestyle", platform, caption: options.caption ?? summary, date: options.date ?? "Aug 18, 2026", views: options.views ?? "148K views", engagement: options.engagement ?? "6.8% engagement", media,
+});
+const review = (id: string, author: string, rating: number, text: string, date: string, tags: string[] = []): CreatorReview => ({ id, author, rating, text, date, tags });
+
 export const demoHomePromos: HomePromo[] = [
-  {
-    id: "promo-creator-search",
-    eyebrow: "CREATOR DISCOVERY",
-    title: "Find creators for your next brief",
-    description: "Use audience, city and category to narrow the right match.",
-    cta: { kind: "icon", position: "bottomRight" },
-    action: "discover",
-    icon: "search-outline",
-    background: "surfaceMuted",
-    layout: "image",
-    audience: "Brand",
-    media: {
-      type: "image",
-      uri: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=1200&q=85",
-    },
-  },
-  {
-    id: "promo-campaign",
-    eyebrow: "CAMPAIGN BRIEFS",
-    title: "Your open campaigns, in one place",
-    description: "Compare proposals and keep every discussion organised.",
-    cta: { kind: "button", label: "View campaigns", position: "bottomRight" },
-    action: "campaigns",
-    icon: "briefcase-outline",
-    background: "accent",
-    layout: "image",
-    audience: "Both",
-    media: {
-      type: "image",
-      uri: "https://images.unsplash.com/photo-1556761175-b413da4baf72?auto=format&fit=crop&w=1200&q=80",
-    },
-  },
-  {
-    id: "promo-shortlist",
-    eyebrow: "SAVED CREATORS",
-    title: "Build a shortlist before you send a proposal",
-    description: "Save profiles and come back when your campaign is ready.",
-    cta: { kind: "link", label: "Explore creators", position: "bottomLeft" },
-    action: "discover",
-    icon: "bookmark-outline",
-    background: "surfaceMuted",
-    layout: "text",
-    audience: "Brand",
-  },
-  {
-    id: "promo-location",
-    eyebrow: "LOCATION MATCHING",
-    title: "Discover local creators for local campaigns",
-    description:
-      "Find profiles by city and state, then connect with confidence.",
-    cta: { kind: "icon", position: "bottomRight" },
-    action: "discover",
-    icon: "location-outline",
-    background: "accent",
-    layout: "split",
-    audience: "Influencer",
-    media: {
-      type: "image",
-      uri: "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?auto=format&fit=crop&w=1200&q=80",
-    },
-  },
-  {
-    id: "promo-image-only",
-    eyebrow: "CREATOR PORTFOLIO",
-    cta: { kind: "icon", position: "bottomRight" },
-    action: "discover",
-    icon: "bookmark-outline",
-    background: "surfaceMuted",
-    layout: "imageOnly",
-    audience: "Both",
-    media: {
-      type: "image",
-      uri: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=1200&q=80",
-    },
-  },
+  { id: "promo-discover-creators", eyebrow: "FIND YOUR NEXT CREATOR", title: "Build a campaign people remember.", description: "Browse trusted creators by niche, city, platform, and budget.", cta: { kind: "button", label: "Explore creators", position: "bottomLeft" }, action: "discover", icon: "search-outline", background: "primary", layout: "text", audience: "Brand" },
+  { id: "promo-save-ideas", eyebrow: "MAKE SPACE FOR GOOD IDEAS", title: "Keep the spark moving.", description: "Save inspiration, plan the next step, and keep every brief together.", cta: { kind: "button", label: "Open studio", position: "bottomLeft" }, action: "campaigns", icon: "bulb-outline", background: "accent", layout: "split", audience: "Both" },
 ];
 
-export const demoInfluencers: Influencer[] = [
-  {
-    id: "i1",
-    name: "Aarohi Mehta",
-    initials: "AM",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=240&q=80",
-    city: "Mumbai",
-    state: "Maharashtra",
-    niche: "Fashion & Beauty",
-    rating: 4.9,
-    reviews: 86,
-    followers: "128K",
-    price: "₹8K – ₹15K",
-    platforms: ["Instagram", "YouTube", "Pinterest"],
-    contentTypes: ["Reel", "Photo post", "Carousel", "Long video"],
-    featured: true,
-  },
-  {
-    id: "i2",
-    name: "Rohan Kapoor",
-    initials: "RK",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=240&q=80",
-    city: "Delhi",
-    state: "Delhi NCR",
-    niche: "Food & Lifestyle",
-    rating: 4.8,
-    reviews: 64,
-    followers: "84K",
-    price: "₹6K – ₹12K",
-    platforms: ["Instagram", "Facebook", "Snapchat"],
-    contentTypes: ["Reel", "Story", "Live", "Photo post"],
-    featured: true,
-  },
-  {
-    id: "i3",
-    name: "Nisha Iyer",
-    initials: "NI",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=240&q=80",
-    city: "Bengaluru",
-    state: "Karnataka",
-    niche: "Tech & Apps",
-    rating: 4.9,
-    reviews: 42,
-    followers: "96K",
-    price: "₹10K – ₹20K",
-    platforms: ["YouTube", "Instagram", "LinkedIn"],
-    contentTypes: ["Long video", "Short video", "Carousel", "Blog post"],
-  },
-  {
-    id: "i4",
-    name: "Kabir Singh",
-    initials: "KS",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=240&q=80",
-    city: "Pune",
-    state: "Maharashtra",
-    niche: "Fitness",
-    rating: 4.7,
-    reviews: 31,
-    followers: "57K",
-    price: "₹5K – ₹9K",
-    platforms: ["Instagram", "TikTok"],
-    contentTypes: ["Reel", "Short video", "Live"],
-  },
-  {
-    id: "i5",
-    name: "Meera Shah",
-    initials: "MS",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=240&q=80",
-    city: "Ahmedabad",
-    state: "Gujarat",
-    niche: "Home & Lifestyle",
-    rating: 4.8,
-    reviews: 52,
-    followers: "71K",
-    price: "₹7K – ₹13K",
-    platforms: ["Instagram", "YouTube", "Pinterest"],
-    contentTypes: ["Photo post", "Carousel", "Reel", "Long video"],
-  },
-  {
-    id: "i6",
-    name: "Arjun Rao",
-    initials: "AR",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=240&q=80",
-    city: "Hyderabad",
-    state: "Telangana",
-    niche: "Gaming & Tech",
-    rating: 4.9,
-    reviews: 48,
-    followers: "142K",
-    price: "₹14K – ₹24K",
-    platforms: ["YouTube", "X", "TikTok"],
-    contentTypes: ["Long video", "Short video", "Live"],
-  },
-  {
-    id: "i7",
-    name: "Sana Ali",
-    initials: "SA",
-    avatarUrl:
-      "https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?auto=format&fit=crop&w=240&q=80",
-    city: "Kolkata",
-    state: "West Bengal",
-    niche: "Travel & Food",
-    rating: 4.8,
-    reviews: 39,
-    followers: "63K",
-    price: "₹6K – ₹11K",
-    platforms: ["Instagram", "Facebook", "Pinterest"],
-    contentTypes: ["Reel", "Story", "Photo post", "Carousel"],
-  },
+const creatorMedia = {
+  desk: "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=900&q=80",
+  food: "https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=900&q=80",
+  wellness: "https://images.unsplash.com/photo-1506126613408-eca07ce68773?auto=format&fit=crop&w=900&q=80",
+  beauty: "https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=900&q=80",
+  travel: "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=900&q=80",
+  studio: "https://images.unsplash.com/photo-1492724441997-5dc865305da7?auto=format&fit=crop&w=900&q=80",
+};
+
+export const demoInfluencers: PublicCreatorProfile[] = [
+  { id: "creator-aarohi-shah", name: "Aarohi Shah", initials: "AS", avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=320&q=80", city: "Mumbai", state: "Maharashtra", niche: "Lifestyle & fashion", rating: 4.9, reviews: 38, followers: "82K", price: "₹8K – ₹15K", engagementRate: "6.8%", platforms: ["Instagram", "YouTube"], socialAccounts: { Instagram: "https://instagram.com/aarohishah", YouTube: "https://youtube.com/@aarohishah" }, contentTypes: ["Reel", "Story", "Photo post"], featured: true, bio: "Lifestyle creator making practical routines feel warm, useful, and easy to try.", publicEmail: "aarohi@creatorhub.demo", publicPhone: "+91 90000 10001", contactEnabled: false, workHistory: [work("work-aarohi-goodground", "Goodground Co.", "GC", "Weekend reset series", "A practical reset routine with a warm, lived-in visual direction.", "Instagram", [imageAttachment("media-aarohi-goodground", "weekend-reset.jpg", creatorMedia.desk)], { category: "Lifestyle", views: "218K views" }), work("work-aarohi-morrow", "Morrow Studio", "MS", "Slow mornings", "A calm morning series built around small, repeatable habits.", "YouTube", [videoAttachment("media-aarohi-morrow", "slow-mornings.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")], { category: "Wellness", period: "Jun 2026" }), work("work-aarohi-nest", "Nest & Noon", "NN", "A very detailed wardrobe edit with styling notes", LONG_COPY, "Instagram", [imageAttachment("media-aarohi-nest", "wardrobe-edit.jpg", creatorMedia.beauty)], { category: "Fashion", caption: LONG_COPY })], reviewItems: [review("review-aarohi-1", "Goodground Co.", 5, "Clear brief, thoughtful feedback, and a very reliable delivery process.", "Aug 2026", ["Communication", "On time"]), review("review-aarohi-2", "Morrow Studio", 5, LONG_COPY, "Jun 2026", ["Creative direction"]), review("review-aarohi-3", "Nest & Noon", 4.8, "The final cuts felt natural and gave our audience an easy story to follow.", "Apr 2026")] },
+  { id: "creator-kabir-mehta", name: "Kabir Mehta", initials: "KM", avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=320&q=80", city: "Delhi", state: "Delhi", niche: "Food & city guides", rating: 4.8, reviews: 24, followers: "54K", price: "₹6K – ₹12K", engagementRate: "7.2%", platforms: ["Instagram", "YouTube"], socialAccounts: { Instagram: "https://instagram.com/kabirmehta", YouTube: "https://youtube.com/@kabirmehta" }, contentTypes: ["Reel", "Short video", "Carousel"], bio: "Food and city guide creator focused on local stories and memorable details.", publicEmail: "kabir@creatorhub.demo", publicPhone: "+91 90000 10002", contactEnabled: false, workHistory: [work("work-kabir-ladle", "Ladle & Leaf", "LL", "Neighbourhood bites", "A neighbourhood-first guide with a strong opening hook.", "Instagram", [imageAttachment("media-kabir-ladle", "neighbourhood-bites.jpg", creatorMedia.food)], { category: "Food" }), work("work-kabir-roam", "Roam Delhi", "RD", "Five stops before sunset", "A neighbourhood-first guide with independent makers.", "YouTube", [videoAttachment("media-kabir-roam", "five-stops.mp4", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")], { category: "Travel" }), work("work-kabir-table", "Table Nine", "TN", "The long lunch guide: a detailed neighbourhood story", LONG_COPY, "Instagram", [imageAttachment("media-kabir-table", "long-lunch.jpg", creatorMedia.food)], { category: "Food" })], reviewItems: [review("review-kabir-1", "Ladle & Leaf", 4, "The team shared a clear direction and kept the shoot organised.", "Jul 2026", ["Organisation"]), review("review-kabir-2", "Roam Delhi", 5, "Kabir found the human story quickly and delivered a useful guide with energy.", "May 2026"), review("review-kabir-3", "Table Nine", 4.7, "A strong collaborator who made a complicated location plan feel manageable.", "Feb 2026")] },
+  { id: "creator-meera-nair", name: "Meera Nair", initials: "MN", avatarUrl: "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=320&q=80", city: "Bengaluru", state: "Karnataka", niche: "Wellness & mindful living", rating: 4.7, reviews: 19, followers: "41K", price: "₹5K – ₹10K", engagementRate: "5.9%", platforms: ["Instagram", "LinkedIn"], socialAccounts: { Instagram: "https://instagram.com/meeranair", LinkedIn: "https://linkedin.com/in/meeranair" }, contentTypes: ["Reel", "Story", "Blog post"], bio: "Wellness creator sharing grounded routines for busy, thoughtful teams and communities.", publicEmail: "meera@creatorhub.demo", publicPhone: "+91 90000 10003", contactEnabled: false, workHistory: [work("work-meera-morrow", "Morrow Studio", "MS", "A slower morning routine", "A quiet, practical routine with clear steps and a clean visual language.", "Instagram", [imageAttachment("media-meera-morrow", "slower-morning.jpg", creatorMedia.wellness)], { category: "Wellness" }), work("work-meera-kind", "Kindred Health", "KH", "Desk-friendly breathing", "A short workplace reset with accessible language and gentle pacing.", "LinkedIn", [videoAttachment("media-meera-kind", "desk-breathing.mp4", "https://www.youtube.com/watch?v=ysz5S6PUM-U")], { category: "Wellness" }), work("work-meera-routine", "Routine Lab", "RL", "A long-form routine guide", LONG_COPY, "YouTube", [videoAttachment("media-meera-routine", "routine-guide.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")], { category: "Wellness", views: "96K views" })], reviewItems: [review("review-meera-1", "Morrow Studio", 5, "A collaborative process with room for a creator-led concept.", "May 2026", ["Creative direction"]), review("review-meera-2", "Kindred Health", 4.6, LONG_COPY, "Mar 2026"), review("review-meera-3", "Routine Lab", 4.5, "Very thoughtful with language, accessibility, and audience context.", "Jan 2026")] },
+  { id: "creator-riya-kapoor", name: "Riya Kapoor", initials: "RK", avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=320&q=80", city: "Pune", state: "Maharashtra", niche: "Beauty & skincare", rating: 4.6, reviews: 31, followers: "126K", price: "₹18K – ₹32K", engagementRate: "4.9%", platforms: ["Instagram", "YouTube"], socialAccounts: { Instagram: "https://instagram.com/riyakapoor", YouTube: "https://youtube.com/@riyakapoor" }, contentTypes: ["Reel", "Story", "Photo post"], featured: true, bio: "Beauty educator who balances ingredient literacy with bright, highly visual tutorials.", workHistory: [work("work-riya-glow", "Glow Theory", "GT", "Ingredient-first skincare", "A visual explainer series that made a complex routine easy to understand.", "Instagram", [imageAttachment("media-riya-glow", "ingredient-skincare.jpg", creatorMedia.beauty)], { category: "Beauty" }), work("work-riya-derma", "Derma House", "DH", "Night routine test", "A clean night routine review with close-up product detail.", "YouTube", [videoAttachment("media-riya-derma", "night-routine.mp4", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")], { category: "Beauty" }), work("work-riya-shade", "Shade Studio", "SS", "Shade matching notes", LONG_COPY, "Instagram", [imageAttachment("media-riya-shade", "shade-notes.jpg", creatorMedia.beauty)], { category: "Beauty" })], reviewItems: [review("review-riya-1", "Glow Theory", 5, "Riya translated the product story without losing the fun visual energy.", "Aug 2026"), review("review-riya-2", "Derma House", 4.5, "Great on camera and very organised with revision rounds.", "May 2026"), review("review-riya-3", "Shade Studio", 4.3, "A detailed collaborator with strong audience understanding.", "Feb 2026")] },
+  { id: "creator-vihaan-roy", name: "Vihaan Roy", initials: "VR", avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?auto=format&fit=crop&w=320&q=80", city: "Kolkata", state: "West Bengal", niche: "Tech & productivity", rating: 4.5, reviews: 16, followers: "210K", price: "₹25K – ₹45K", engagementRate: "3.8%", platforms: ["YouTube", "Instagram", "LinkedIn"], socialAccounts: { YouTube: "https://youtube.com/@vihaanroy", Instagram: "https://instagram.com/vihaanroy", LinkedIn: "https://linkedin.com/in/vihaanroy" }, contentTypes: ["Long video", "Short video", "Blog post"], bio: "Tech and productivity reviewer creating clear, practical explainers for curious working professionals.", workHistory: [work("work-vihaan-flow", "Flow Desk", "FD", "A calmer digital desk", "A productivity setup tour with a clear before-and-after structure.", "YouTube", [videoAttachment("media-vihaan-flow", "digital-desk.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")], { category: "Technology" }), work("work-vihaan-note", "Noteform", "NF", "Notes that stay useful", "A product walkthrough focused on real team habits.", "LinkedIn", [imageAttachment("media-vihaan-note", "notes-workflow.jpg", creatorMedia.studio)], { category: "Technology" }), work("work-vihaan-long", "Signal Lab", "SL", "The complete creator workflow for a small production team", LONG_COPY, "YouTube", [videoAttachment("media-vihaan-long", "creator-workflow.mp4", "https://www.youtube.com/watch?v=ysz5S6PUM-U")], { category: "Technology" })], reviewItems: [review("review-vihaan-1", "Flow Desk", 4.5, "Clear communication and a strong ability to make technical details feel approachable.", "Jul 2026"), review("review-vihaan-2", "Noteform", 4, "The review was detailed, useful, and delivered on the agreed timeline.", "Apr 2026"), review("review-vihaan-3", "Signal Lab", 4.6, LONG_COPY, "Dec 2025")] },
+  { id: "creator-anaya-menon", name: "Anaya Menon", initials: "AM", avatarUrl: "https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?auto=format&fit=crop&w=320&q=80", city: "Chennai", state: "Tamil Nadu", niche: "Home & interiors", rating: 4.8, reviews: 27, followers: "68K", price: "₹10K – ₹18K", engagementRate: "6.1%", platforms: ["Instagram", "Pinterest"], socialAccounts: { Instagram: "https://instagram.com/anayamenon", Pinterest: "https://pinterest.com/anayamenon" }, contentTypes: ["Photo post", "Reel", "Carousel"], bio: "Home and interiors creator sharing considered spaces, small rituals, and practical styling ideas.", workHistory: [work("work-anaya-home", "House of Line", "HL", "A softer entryway", "A compact styling story with useful product details.", "Instagram", [imageAttachment("media-anaya-home", "soft-entryway.jpg", creatorMedia.desk)], { category: "Interiors" }), work("work-anaya-table", "Table Story", "TS", "The everyday table", "A seasonal table setting with a simple, repeatable point of view.", "Pinterest", [imageAttachment("media-anaya-table", "everyday-table.jpg", creatorMedia.food)], { category: "Interiors" }), work("work-anaya-space", "Space Notes", "SN", "A very complete room refresh", LONG_COPY, "Instagram", [imageAttachment("media-anaya-space", "room-refresh.jpg", creatorMedia.studio)], { category: "Interiors" })], reviewItems: [review("review-anaya-1", "House of Line", 5, "Beautifully considered work and very easy to collaborate with.", "Jun 2026"), review("review-anaya-2", "Table Story", 4.8, "The content felt useful, warm, and fully aligned with the brief.", "Mar 2026"), review("review-anaya-3", "Space Notes", 4.7, "Strong styling instincts and careful attention to the small details.", "Jan 2026")] },
+  { id: "creator-advait-joshi", name: "Advait Joshi", initials: "AJ", avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=320&q=80", city: "Ahmedabad", state: "Gujarat", niche: "Fitness & outdoor", rating: 4.4, reviews: 12, followers: "37K", price: "₹4K – ₹9K", engagementRate: "8.4%", platforms: ["Instagram", "YouTube"], socialAccounts: { Instagram: "https://instagram.com/advaitjoshi", YouTube: "https://youtube.com/@advaitjoshi" }, contentTypes: ["Reel", "Short video", "Live"], bio: "Outdoor fitness creator focused on approachable movement, local routes, and steady progress.", workHistory: [work("work-advait-trail", "Trail Form", "TF", "The ten-minute trail", "A practical warm-up and route guide for new runners.", "Instagram", [videoAttachment("media-advait-trail", "ten-minute-trail.mp4", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")], { category: "Fitness" }), work("work-advait-move", "Move Daily", "MD", "A desk break that works", "A short movement break designed for a real workday.", "YouTube", [videoAttachment("media-advait-move", "desk-break.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")], { category: "Fitness" }), work("work-advait-kit", "Open Air", "OA", "The complete outdoor kit guide", LONG_COPY, "Instagram", [imageAttachment("media-advait-kit", "outdoor-kit.jpg", creatorMedia.travel)], { category: "Fitness" })], reviewItems: [review("review-advait-1", "Trail Form", 4.5, "Friendly, reliable, and excellent at making movement feel approachable.", "May 2026"), review("review-advait-2", "Move Daily", 4.3, "The final videos had a natural pace and clear instructions.", "Feb 2026"), review("review-advait-3", "Open Air", 4.4, "Very responsive and comfortable adapting the shoot plan.", "Nov 2025")] },
+  { id: "creator-sana-ali", name: "Sana Ali", initials: "SA", avatarUrl: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=320&q=80", city: "Hyderabad", state: "Telangana", niche: "Parenting & family", rating: 4.9, reviews: 42, followers: "93K", price: "₹12K – ₹22K", engagementRate: "7.9%", platforms: ["Instagram", "Facebook"], socialAccounts: { Instagram: "https://instagram.com/sanaali", Facebook: "https://facebook.com/sanaali" }, contentTypes: ["Reel", "Story", "Photo post"], bio: "Family and parenting creator sharing honest, practical routines with a warm community-first voice.", workHistory: [work("work-sana-home", "Little Sunday", "LS", "A calmer school morning", "A warm routine story that respects the messiness of family life.", "Instagram", [imageAttachment("media-sana-home", "school-morning.jpg", creatorMedia.desk)], { category: "Parenting" }), work("work-sana-play", "Playwell", "PW", "Open-ended play ideas", "Three simple play prompts for an ordinary afternoon.", "Facebook", [videoAttachment("media-sana-play", "play-ideas.mp4", "https://www.youtube.com/watch?v=ysz5S6PUM-U")], { category: "Parenting" }), work("work-sana-long", "Kind Home", "KH", "A very detailed family routine", LONG_COPY, "Instagram", [imageAttachment("media-sana-long", "family-routine.jpg", creatorMedia.studio)], { category: "Parenting" })], reviewItems: [review("review-sana-1", "Little Sunday", 5, "Sana brought warmth and care to every stage of the collaboration.", "Aug 2026"), review("review-sana-2", "Playwell", 5, LONG_COPY, "Jun 2026"), review("review-sana-3", "Kind Home", 4.8, "A thoughtful partner with an unusually engaged audience.", "Mar 2026")] },
+  { id: "creator-isha-verma", name: "Isha Verma", initials: "IV", avatarUrl: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=320&q=80", city: "Jaipur", state: "Rajasthan", niche: "Travel & culture", rating: 4.3, reviews: 9, followers: "29K", price: "₹4K – ₹8K", engagementRate: "9.1%", platforms: ["Instagram", "YouTube", "Pinterest"], socialAccounts: { Instagram: "https://instagram.com/ishaverma", YouTube: "https://youtube.com/@ishaverma", Pinterest: "https://pinterest.com/ishaverma" }, contentTypes: ["Reel", "Long video", "Carousel"], bio: "Travel and culture storyteller documenting thoughtful routes, independent makers, and small details.", workHistory: [work("work-isha-jaipur", "Roam Local", "RL", "A quiet Jaipur morning", "A slow route through makers, food, and architecture.", "Instagram", [imageAttachment("media-isha-jaipur", "quiet-jaipur.jpg", creatorMedia.travel)], { category: "Travel" }), work("work-isha-route", "Wayfinder", "WF", "The two-hour route", "A useful local guide for a short weekend visit.", "YouTube", [videoAttachment("media-isha-route", "two-hour-route.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")], { category: "Travel" }), work("work-isha-long", "Heritage Walks", "HW", "The complete heritage walk diary", LONG_COPY, "Pinterest", [imageAttachment("media-isha-long", "heritage-diary.jpg", creatorMedia.travel)], { category: "Travel" })], reviewItems: [review("review-isha-1", "Roam Local", 4.5, "Isha made a detailed place story feel personal and easy to follow.", "Jul 2026"), review("review-isha-2", "Wayfinder", 4.2, "Good preparation and a strong eye for local details.", "Apr 2026"), review("review-isha-3", "Heritage Walks", 4.3, "The delivery was thoughtful and the visual references were excellent.", "Jan 2026")] },
+  { id: "creator-neel-batra", name: "Neel Batra", initials: "NB", avatarUrl: "https://images.unsplash.com/photo-1504593811423-6dd665756598?auto=format&fit=crop&w=320&q=80", city: "Gurugram", state: "Haryana", niche: "Business & career", rating: 4.2, reviews: 7, followers: "18K", price: "₹3K – ₹7K", engagementRate: "5.1%", platforms: ["LinkedIn", "YouTube"], socialAccounts: { LinkedIn: "https://linkedin.com/in/neelbatra", YouTube: "https://youtube.com/@neelbatra" }, contentTypes: ["Long video", "Blog post", "Carousel"], bio: "Career creator translating useful workplace lessons into clear, practical stories for early teams.", workHistory: [work("work-neel-career", "Launchpad", "LP", "A better first week", "A concise onboarding story with practical checklists.", "LinkedIn", [imageAttachment("media-neel-career", "first-week.jpg", creatorMedia.studio)], { category: "Business" }), work("work-neel-meeting", "Northstar", "NS", "Meetings worth keeping", "A structured guide to making one recurring meeting more useful.", "YouTube", [videoAttachment("media-neel-meeting", "meetings.mp4", "https://www.youtube.com/watch?v=ysz5S6PUM-U")], { category: "Business" }), work("work-neel-long", "Workkind", "WK", "A detailed manager field guide", LONG_COPY, "LinkedIn", [imageAttachment("media-neel-long", "manager-guide.jpg", creatorMedia.desk)], { category: "Business" })], reviewItems: [review("review-neel-1", "Launchpad", 4.3, "Clear, practical, and easy for our audience to act on.", "Jun 2026"), review("review-neel-2", "Northstar", 4.1, "Neel handled the research and delivery with care.", "Feb 2026"), review("review-neel-3", "Workkind", 4.2, "A dependable creator with a thoughtful editorial process.", "Oct 2025")] },
+  { id: "creator-tara-das", name: "Tara Das", initials: "TD", avatarUrl: "https://images.unsplash.com/photo-1531123897727-8f129e1688ce?auto=format&fit=crop&w=320&q=80&sat=-20", city: "Kochi", state: "Kerala", niche: "Sustainable living", rating: 4.6, reviews: 14, followers: "33K", price: "₹5K – ₹11K", engagementRate: "7.6%", platforms: ["Instagram", "Pinterest"], socialAccounts: { Instagram: "https://instagram.com/taradas", Pinterest: "https://pinterest.com/taradas" }, contentTypes: ["Reel", "Carousel", "Photo post"], bio: "Sustainability creator turning lower-waste choices into practical, non-judgmental everyday content.", workHistory: [work("work-tara-refill", "Refill Room", "RR", "The refill shelf", "A simple visual guide to starting a lower-waste pantry.", "Instagram", [imageAttachment("media-tara-refill", "refill-shelf.jpg", creatorMedia.desk)], { category: "Sustainability" }), work("work-tara-repair", "Good Loop", "GL", "Repair before replace", "A small repair story with a clear call to action.", "Pinterest", [imageAttachment("media-tara-repair", "repair-story.jpg", creatorMedia.studio)], { category: "Sustainability" }), work("work-tara-long", "Earth Edit", "EE", "The complete low-waste home notes", LONG_COPY, "Instagram", [videoAttachment("media-tara-long", "low-waste-notes.mp4", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")], { category: "Sustainability" })], reviewItems: [review("review-tara-1", "Refill Room", 4.7, "Tara made the product useful without making the story feel preachy.", "May 2026"), review("review-tara-2", "Good Loop", 4.5, "Reliable, clear, and very thoughtful with claims and context.", "Mar 2026"), review("review-tara-3", "Earth Edit", 4.6, LONG_COPY, "Dec 2025")] },
+  { id: "creator-omkar-patil", name: "Omkar Patil", initials: "OP", avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=320&q=80&sat=-15", city: "Nashik", state: "Maharashtra", niche: "Agriculture & local food", rating: 4.1, reviews: 6, followers: "12K", price: "₹3K – ₹6K", engagementRate: "8.8%", platforms: ["Instagram", "Facebook"], socialAccounts: { Instagram: "https://instagram.com/omkarpatil", Facebook: "https://facebook.com/omkarpatil" }, contentTypes: ["Reel", "Story", "Live"], bio: "Local food and agriculture storyteller connecting small producers with curious urban audiences.", workHistory: [work("work-omkar-farm", "Field Table", "FT", "From field to table", "A producer-led story with a warm, direct voice.", "Instagram", [imageAttachment("media-omkar-farm", "field-table.jpg", creatorMedia.food)], { category: "Food" }), work("work-omkar-season", "Harvest House", "HH", "The seasonal basket", "A practical look at what is in season and how to use it.", "Facebook", [videoAttachment("media-omkar-season", "seasonal-basket.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")], { category: "Food" }), work("work-omkar-long", "Local Pantry", "LP", "A detailed producer interview", LONG_COPY, "Instagram", [imageAttachment("media-omkar-long", "producer-interview.jpg", creatorMedia.food)], { category: "Food" })], reviewItems: [review("review-omkar-1", "Field Table", 4.2, "A genuine local voice with a strong connection to the community.", "Apr 2026"), review("review-omkar-2", "Harvest House", 4, "Very good with people, locations, and real-world constraints.", "Jan 2026"), review("review-omkar-3", "Local Pantry", 4.1, "The story felt honest and useful to our audience.", "Nov 2025")] },
+  { id: "creator-zoya-khan", name: "Zoya Khan", initials: "ZK", avatarUrl: "https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?auto=format&fit=crop&w=320&q=80&sat=-10", city: "Lucknow", state: "Uttar Pradesh", niche: "Fashion & craft", rating: 4.7, reviews: 22, followers: "76K", price: "₹9K – ₹17K", engagementRate: "6.4%", platforms: ["Instagram", "YouTube", "Pinterest"], socialAccounts: { Instagram: "https://instagram.com/zoyakhan", YouTube: "https://youtube.com/@zoyakhan", Pinterest: "https://pinterest.com/zoyakhan" }, contentTypes: ["Reel", "Photo post", "Carousel"], bio: "Fashion and craft creator highlighting skilled makers, considered styling, and regional detail.", workHistory: [work("work-zoya-craft", "Threadline", "TL", "A maker's morning", "A close, human story about a craft process and the person behind it.", "Instagram", [imageAttachment("media-zoya-craft", "makers-morning.jpg", creatorMedia.beauty)], { category: "Fashion" }), work("work-zoya-weave", "Weave House", "WH", "One textile, three ways", "A styling series built around one beautiful textile.", "YouTube", [videoAttachment("media-zoya-weave", "textile-styling.mp4", "https://www.youtube.com/watch?v=ysz5S6PUM-U")], { category: "Fashion" }), work("work-zoya-long", "Crafted India", "CI", "The full craft story archive", LONG_COPY, "Pinterest", [imageAttachment("media-zoya-long", "craft-archive.jpg", creatorMedia.studio)], { category: "Craft" })], reviewItems: [review("review-zoya-1", "Threadline", 4.9, "Zoya brought genuine curiosity and a strong visual point of view.", "Aug 2026"), review("review-zoya-2", "Weave House", 4.6, "The content was beautiful, on time, and easy to approve.", "Jun 2026"), review("review-zoya-3", "Crafted India", 4.7, LONG_COPY, "Mar 2026")] },
 ];
+
+export const demoBrandBriefs: BrandBrief[] = [
+  { id: "brief-goodground-reset", campaignId: "campaign-weekend-reset", brandId: "brand-goodground-co", brandName: "Goodground Co.", brandInitials: "GC", title: "Weekend reset with Goodground", brandLogoUrl: creatorMedia.desk, brandReviews: [{ id: "review-goodground-1", creatorName: "Aarohi Shah", rating: 5, text: "Clear brief and thoughtful feedback throughout the collaboration.", date: "Aug 2026" }], description: "Create a warm, practical reel showing how your audience resets before a busy week.", brandDescription: "Goodground makes small, useful products for calmer everyday routines.", city: "Mumbai", category: "Lifestyle", budget: "₹15K – ₹25K", deliverables: "1 reel + 3 story frames", preferredPlatforms: ["Instagram", "YouTube"], requirements: [{ id: "hook", label: "Share your opening hook or content angle.", type: "text", required: true }, { id: "reference", label: "Add a public reference link.", type: "url", required: false }, { id: "moodboard", label: "Attach a sample moodboard or relevant work.", type: "file", required: false }], publicDetails: ["Remote-friendly", "Usage rights discussed in chat", "Brief review within 2 business days"], matchScore: 92, active: true },
+  { id: "brief-ladle-city-bites", campaignId: "campaign-city-bites", brandId: "brand-ladle-leaf", brandName: "Ladle & Leaf", brandInitials: "LL", title: "Three city bites worth the detour", brandLogoUrl: creatorMedia.food, brandReviews: [{ id: "review-ladle-1", creatorName: "Kabir Mehta", rating: 4, text: "The team shared a clear direction and kept the shoot organised.", date: "Jul 2026" }], description: "Tell the story of one local dish and the person who makes it special.", brandDescription: "Ladle & Leaf documents local food culture through thoughtful, useful guides.", city: "Delhi", category: "Food", budget: "₹10K – ₹18K", deliverables: "1 short video + usage rights", preferredPlatforms: ["Instagram", "YouTube"], requirements: [{ id: "location", label: "Which neighbourhood would you cover?", type: "text", required: true }, { id: "portfolio", label: "Share a relevant food or city guide link.", type: "url", required: false }], publicDetails: ["Delhi preferred", "One location visit", "Usage rights agreed before publishing"], matchScore: 84, active: true },
+  { id: "brief-morrow-morning", campaignId: "campaign-morning-routine", brandId: "brand-morrow-studio", brandName: "Morrow Studio", brandInitials: "MS", title: "A slower morning routine", brandLogoUrl: creatorMedia.wellness, brandReviews: [{ id: "review-morrow-1", creatorName: "Meera Nair", rating: 5, text: "A collaborative process with room for a creator-led concept.", date: "May 2026" }], description: "Share a grounded morning ritual with a clean, calm visual language.", brandDescription: "Morrow Studio helps people build sustainable routines without noise or pressure.", city: "Bengaluru", category: "Wellness", budget: "₹12K – ₹20K", deliverables: "1 reel + 2 story frames", preferredPlatforms: ["Instagram", "LinkedIn"], requirements: [{ id: "routine", label: "Describe the routine you would share.", type: "text", required: true }, { id: "work", label: "Attach or link one relevant work sample.", type: "file", required: false }], publicDetails: ["Bengaluru preferred", "Creator-led concept", "One round of feedback"], matchScore: 76, active: true },
+];
+
+type CampaignSeed = Pick<Campaign, "id" | "brandId" | "brandInitials" | "brand" | "title" | "description" | "city" | "category" | "budget" | "deadline"> & Partial<Campaign>;
+const campaign = (seed: CampaignSeed): Campaign => ({ status: "Published", visibility: "public", platforms: ["Instagram"], deliverables: "1 short video + 3 story frames", requirements: ["Share a clear content angle", "Provide one relevant work sample"], creatorRequirements: "Thoughtful creators with a clear audience point of view.", brandDescription: `${seed.brand} creates useful products and experiences for a considered audience.`, createdAt: isoDate(-18), updatedAt: isoDate(-2), publishedAt: isoDate(-12), ...seed });
 
 export const demoCampaigns: Campaign[] = [
-  {
-    id: "c1",
-    brand: "Mellow Skincare",
-    title: "Monsoon glow routine",
-    description:
-      "Share a simple three-step skincare routine through a warm, everyday reel.",
-    city: "Mumbai",
-    category: "Beauty",
-    budget: "₹10K – ₹18K",
-    deadline: "Apply by 24 Sep",
-    status: "Open",
-  },
-  {
-    id: "c2",
-    brand: "FreshBite",
-    title: "Weekend café discovery",
-    description:
-      "Visit a new café and create an honest short-form food discovery post.",
-    city: "Delhi NCR",
-    category: "Food",
-    budget: "₹7K – ₹12K",
-    deadline: "Apply by 28 Sep",
-    status: "Open",
-  },
-  {
-    id: "c3",
-    brand: "PocketPay",
-    title: "Creator app walkthrough",
-    description:
-      "Show how a quick payment flow fits naturally into a busy creator day.",
-    city: "Pan India",
-    category: "Tech",
-    budget: "₹12K – ₹22K",
-    deadline: "Proposal sent",
-    status: "Proposal sent",
-  },
-  {
-    id: "c4",
-    brand: "Stride Studio",
-    title: "New activewear drop",
-    description:
-      "Style the new training collection in a high-energy gym or outdoor routine.",
-    city: "Bengaluru",
-    category: "Fitness",
-    budget: "₹9K – ₹16K",
-    deadline: "Apply by 30 Sep",
-    status: "Open",
-  },
-  {
-    id: "c5",
-    brand: "Natura Table",
-    title: "Weekend recipe series",
-    description:
-      "Create a relaxed recipe reel featuring the brand’s pantry essentials.",
-    city: "Pan India",
-    category: "Food",
-    budget: "₹8K – ₹14K",
-    deadline: "Apply by 2 Oct",
-    status: "Open",
-  },
-  {
-    id: "c6",
-    brand: "Roamly Stays",
-    title: "City stay guide",
-    description:
-      "Document a thoughtful weekend stay with local recommendations for travellers.",
-    city: "Jaipur",
-    category: "Travel",
-    budget: "₹11K – ₹19K",
-    deadline: "Apply by 4 Oct",
-    status: "Open",
-  },
-  {
-    id: "c7",
-    brand: "Nook Living",
-    title: "Small-space refresh",
-    description:
-      "Show practical ways to refresh a compact home using the new décor edit.",
-    city: "Pan India",
-    category: "Home",
-    budget: "₹8K – ₹15K",
-    deadline: "Apply by 6 Oct",
-    status: "Open",
-  },
-  {
-    id: "c8",
-    brand: "Playverse",
-    title: "Co-op game launch",
-    description:
-      "Create a first-play reaction and invite your community to join the launch.",
-    city: "Hyderabad",
-    category: "Gaming",
-    budget: "₹13K – ₹24K",
-    deadline: "Apply by 9 Oct",
-    status: "Open",
-  },
+  campaign({ id: "campaign-weekend-reset", brandId: "brand-goodground-co", brandInitials: "GC", brand: "Goodground Co.", title: "Weekend reset with Goodground", description: "Create a warm, practical reel showing how your audience resets before a busy week.", city: "Mumbai", category: "Lifestyle", budget: "₹15K – ₹25K", deadline: "2026-10-08", platforms: ["Instagram", "YouTube"], deliverables: "1 reel + 3 story frames", requirements: ["Share your opening hook", "Include one practical routine", "Provide a public reference link"], collaborationVideoUrl: "https://www.youtube.com/watch?v=ScMzIvxBSi4", collaborationVideoLabel: "Goodground reference brief", media: [imageAttachment("campaign-weekend-reset-image", "weekend-reset-board.jpg", creatorMedia.desk)] }),
+  campaign({ id: "campaign-city-bites", brandId: "brand-ladle-leaf", brandInitials: "LL", brand: "Ladle & Leaf", title: "Three city bites worth the detour", description: "A short-form city guide featuring one local dish and the story behind it.", city: "Delhi", category: "Food", budget: "₹10K – ₹18K", deadline: "2026-10-14", platforms: ["Instagram", "YouTube"], deliverables: "1 short video + usage rights", requirements: ["Choose one neighbourhood", "Interview or credit the maker", "Share a food guide link"], collaborationVideoUrl: "https://www.youtube.com/watch?v=aqz-KE-bpKQ", collaborationVideoLabel: "City bites reference", media: [imageAttachment("campaign-city-bites-image", "city-bites.jpg", creatorMedia.food)] }),
+  campaign({ id: "campaign-morning-routine", brandId: "brand-morrow-studio", brandInitials: "MS", brand: "Morrow Studio", title: "A slower morning routine", description: "Share a grounded morning ritual with a clean, calm visual language.", city: "Bengaluru", category: "Wellness", budget: "₹12K – ₹20K", deadline: "2026-10-21", platforms: ["Instagram", "LinkedIn"], deliverables: "1 reel + 2 story frames", requirements: ["Describe the routine", "Show the product naturally", "Share one relevant work sample"], collaborationVideoUrl: "https://www.youtube.com/watch?v=ysz5S6PUM-U", collaborationVideoLabel: "Morning routine reference", media: [imageAttachment("campaign-morning-image", "morning-light.jpg", creatorMedia.wellness)] }),
+  campaign({ id: "campaign-glow-ingredients", brandId: "brand-glow-theory", brandInitials: "GT", brand: "Glow Theory", title: "Ingredient stories that make skincare clearer", description: LONG_COPY, city: "Pune", category: "Beauty", budget: "₹20K – ₹35K", deadline: "2026-10-28", platforms: ["Instagram", "YouTube"], deliverables: "2 reels + 4 story frames + usage rights", requirements: [LONG_COPY, "Use clear ingredient language", "Submit a rough hook before filming"], creatorRequirements: LONG_COPY, collaborationVideoUrl: "https://www.youtube.com/watch?v=ScMzIvxBSi4", collaborationVideoLabel: "Ingredient education reference", media: [imageAttachment("campaign-glow-image", "ingredient-board.jpg", creatorMedia.beauty), videoAttachment("campaign-glow-video", "texture-demo.mp4", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")] }),
+  campaign({ id: "campaign-digital-desk", brandId: "brand-flow-desk", brandInitials: "FD", brand: "Flow Desk", title: "Build a calmer digital desk", description: "Show one small workflow change that helps a busy audience stay focused.", city: "Kolkata", category: "Technology", budget: "₹28K – ₹48K", deadline: "2026-11-04", platforms: ["YouTube", "LinkedIn"], deliverables: "1 long video + 2 short cutdowns", requirements: ["Explain the workflow", "Include a practical example", "Share audience context"], creatorRequirements: "Tech, productivity, and business creators with an engaged working audience.", collaborationVideoUrl: "https://www.youtube.com/watch?v=ysz5S6PUM-U", collaborationVideoLabel: "Workflow example" }),
+  campaign({ id: "campaign-open-air-move", brandId: "brand-open-air", brandInitials: "OA", brand: "Open Air", title: "Move more without making it complicated", description: "Create an approachable outdoor movement story for people starting again.", city: "Ahmedabad", category: "Fitness", budget: "₹8K – ₹16K", deadline: "2026-11-10", platforms: ["Instagram", "YouTube"], deliverables: "2 short videos + 3 story frames", requirements: ["Show safe, accessible movement", "Include a location detail", "Share a simple progression"], media: [videoAttachment("campaign-open-air-video", "movement-reference.mp4", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")] }),
+  campaign({ id: "campaign-maker-morning", brandId: "brand-threadline", brandInitials: "TL", brand: "Threadline", title: "A maker's morning", description: "Tell a human story about the craft, care, and people behind a finished piece.", city: "Lucknow", category: "Fashion", budget: "₹14K – ₹24K", deadline: "2026-11-15", platforms: ["Instagram", "Pinterest"], deliverables: "1 reel + 8 stills", requirements: ["Credit the maker", "Capture process detail", "Share a moodboard"], media: [imageAttachment("campaign-threadline-image", "maker-morning.jpg", creatorMedia.studio)] }),
+  campaign({ id: "campaign-low-waste-home", brandId: "brand-earth-edit", brandInitials: "EE", brand: "Earth Edit", title: "Low-waste choices for a real home", description: LONG_COPY, city: "Kochi", category: "Sustainability", budget: "₹9K – ₹17K", deadline: "2026-11-22", platforms: ["Instagram", "Pinterest"], deliverables: "1 reel + 1 carousel + 3 story frames", requirements: ["Avoid unsupported claims", "Show a realistic home context", LONG_COPY], creatorRequirements: LONG_COPY, media: [imageAttachment("campaign-earth-image", "low-waste-home.jpg", creatorMedia.desk)] }),
+  campaign({ id: "campaign-field-table", brandId: "brand-field-table", brandInitials: "FT", brand: "Field Table", title: "From field to table", description: "Introduce a local producer and show the journey of one seasonal ingredient.", city: "Nashik", category: "Food", budget: "₹7K – ₹13K", deadline: "2026-11-28", platforms: ["Instagram", "Facebook"], deliverables: "1 reel + 2 story frames", requirements: ["Credit the producer", "Show one seasonal detail", "Keep the story accessible"] }),
+  campaign({ id: "campaign-family-sunday", brandId: "brand-little-sunday", brandInitials: "LS", brand: "Little Sunday", title: "A calmer family Sunday", description: "Share one warm, practical routine that makes a family day feel more manageable.", city: "Hyderabad", category: "Parenting", budget: "₹16K – ₹28K", deadline: "2026-12-02", platforms: ["Instagram", "Facebook"], deliverables: "2 reels + 4 story frames", requirements: ["Keep the story honest", "Use family-safe framing", "Include a practical takeaway"] }),
+  campaign({ id: "campaign-archived-style", brandId: "brand-archive-house", brandInitials: "AH", brand: "Archive House", title: "Archived styling reference", description: "An archived campaign kept to exercise brand history and archive states.", city: "Mumbai", category: "Fashion", budget: "₹11K – ₹19K", deadline: "2026-08-01", status: "Archived", archived: true }),
+  campaign({ id: "campaign-draft-pantry", brandId: "brand-goodground-co", brandInitials: "GC", brand: "Goodground Co.", title: "Draft: the thoughtful pantry", description: "A private campaign draft that should remain invisible in Creator Market until published.", city: "Mumbai", category: "Lifestyle", budget: "₹18K – ₹30K", deadline: "2026-12-12", status: "Draft", visibility: "private", publishedAt: undefined }),
+  campaign({ id: "campaign-review-pending", brandId: "brand-ladle-leaf", brandInitials: "LL", brand: "Ladle & Leaf", title: "Pending review: winter food stories", description: "A campaign awaiting internal review before it becomes discoverable.", city: "Delhi", category: "Food", budget: "₹12K – ₹22K", deadline: "2026-12-18", status: "Proposal sent" }),
 ];
 
 export const demoConversations: Conversation[] = [
-  {
-    id: "m1",
-    name: "Aarohi Mehta",
-    initials: "AM",
-    message: "I would love to know more about the deliverables.",
-    time: "10:42 AM",
-    unread: 2,
-  },
-  {
-    id: "m2",
-    name: "Mellow Skincare",
-    initials: "MS",
-    message: "Your proposal has been accepted.",
-    time: "Yesterday",
-  },
-  {
-    id: "m3",
-    name: "Rohan Kapoor",
-    initials: "RK",
-    message: "Thanks for reaching out!",
-    time: "Mon",
-  },
+  { id: "conversation-goodground", name: "Goodground Co.", initials: "GC", message: "Can you share the first cut by Friday?", time: "10:42 AM", unread: 2 },
+  { id: "conversation-aarohi", name: "Aarohi Shah", initials: "AS", message: "The brief looks great. I have one idea for the hook.", time: "Yesterday" },
+  { id: "conversation-threadline", name: "Threadline", initials: "TL", message: "The maker reference is ready for your review.", time: "Mon", unread: 1 },
 ];
 
 export const demoProposals: DemoProposal[] = [
-  {
-    id: "p1",
-    direction: "brand_to_creator",
-    status: "Accepted",
-    campaignId: "c1",
-    campaignTitle: "Monsoon glow routine",
-    participantName: "Aarohi Mehta",
-    participantInitials: "AM",
-    participantAvatarUrl: demoInfluencers[0]?.avatarUrl,
-    city: "Mumbai",
-    amount: "₹12,000",
-    deliverables: "1 reel, 3 story frames, usage for 30 days",
-    message: "A warm, useful routine that feels natural for your audience.",
-    updatedAt: "Today, 10:43 AM",
-    attachments: [
-      { id: "a1", name: "Monsoon-campaign-brief.pdf", type: "file" },
-      {
-        id: "a2",
-        name: "Routine-reference.jpg",
-        type: "image",
-        uri: "https://images.unsplash.com/photo-1556228578-8c89e6adf883?auto=format&fit=crop&w=900&q=80",
-      },
-    ],
-  },
-  {
-    id: "p2",
-    direction: "creator_to_brand",
-    status: "Pending",
-    campaignId: "c2",
-    campaignTitle: "Weekend café discovery",
-    participantName: "FreshBite",
-    participantInitials: "FB",
-    city: "Delhi",
-    amount: "₹9,500",
-    deliverables: "1 short video, 5 story frames, location tag",
-    message: "I can cover the café visit with a balanced, local-first review.",
-    updatedAt: "Yesterday",
-    attachments: [
-      {
-        id: "a3",
-        name: "Cafe-concept.mp4",
-        type: "video",
-        uri: "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=900&q=80",
-      },
-    ],
-  },
-  {
-    id: "p3",
-    direction: "creator_to_brand",
-    status: "Completed",
-    campaignId: "c3",
-    campaignTitle: "Creator app walkthrough",
-    participantName: "PocketPay",
-    participantInitials: "PP",
-    city: "Pan India",
-    amount: "₹18,000",
-    deliverables: "1 long video, 2 short clips, pinned comment",
-    message: "The walkthrough is live and the agreed files have been shared.",
-    updatedAt: "18 Sep",
-    attachments: [{ id: "a4", name: "Walkthrough-final.mp4", type: "video" }],
-  },
-  {
-    id: "p4",
-    direction: "brand_to_creator",
-    status: "Pending",
-    campaignId: "c4",
-    campaignTitle: "New activewear drop",
-    participantName: "Kabir Singh",
-    participantInitials: "KS",
-    participantAvatarUrl: demoInfluencers[3]?.avatarUrl,
-    city: "Pune",
-    amount: "₹12,500",
-    deliverables: "1 training reel, 4 story frames",
-    message: "Please share your availability and preferred shoot location.",
-    updatedAt: "17 Sep",
-    attachments: [{ id: "a5", name: "Activewear-brief.pdf", type: "file" }],
-  },
+  { id: "proposal-weekend-reset", proposalTitle: "Weekend reset with Goodground", direction: "brand_to_creator", status: "Pending", campaignId: "campaign-weekend-reset", campaignTitle: "Weekend reset with Goodground", participantName: "Aarohi Shah", participantInitials: "AS", city: "Mumbai", amount: "₹18,000", deliverables: "1 reel + 3 story frames", message: "We would love a practical, lived-in take on a weekend reset.", updatedAt: "Sep 24, 2026" },
+  { id: "proposal-goodground-accepted", proposalTitle: "Goodground creator package", direction: "brand_to_creator", status: "Accepted", campaignId: "campaign-weekend-reset", campaignTitle: "Weekend reset with Goodground", participantName: "Sana Ali", participantInitials: "SA", city: "Hyderabad", amount: "₹22,000", deliverables: "2 reels + 4 story frames", message: "Please keep the routine warm and practical for families.", updatedAt: "Sep 22, 2026" },
+  { id: "proposal-goodground-paid", proposalTitle: "Goodground final delivery", direction: "brand_to_creator", status: "Completed", campaignId: "campaign-weekend-reset", campaignTitle: "Weekend reset with Goodground", participantName: "Riya Kapoor", participantInitials: "RK", city: "Pune", amount: "₹25,000", deliverables: "2 reels + usage rights", message: "Final delivery approved and payment released.", updatedAt: "Sep 18, 2026", schedule: { format: "Reel", deliveryDate: dateKey(-6), deliveryTime: "5:00 PM", reminderSet: true } },
+  { id: "proposal-city-bites", proposalTitle: "Three city bites worth the detour", direction: "creator_to_brand", status: "Accepted", campaignId: "campaign-city-bites", campaignTitle: "Three city bites worth the detour", participantName: "Ladle & Leaf", participantInitials: "LL", city: "Delhi", amount: "₹14,000", deliverables: "1 short video + usage rights", message: "I can deliver a neighbourhood-first guide with a strong opening hook.", updatedAt: "Sep 23, 2026", schedule: { format: "Short video", deliveryDate: dateKey(7), deliveryTime: "5:00 PM", reminderSet: true } },
+  { id: "proposal-morrow-complete", proposalTitle: "A slower morning routine", direction: "brand_to_creator", status: "Completed", campaignId: "campaign-morning-routine", campaignTitle: "A slower morning routine", participantName: "Meera Nair", participantInitials: "MN", city: "Bengaluru", amount: "₹16,000", deliverables: "1 reel + 2 story frames", message: "The final morning routine cut is approved.", updatedAt: "Sep 15, 2026" },
+  { id: "proposal-flow-pending", proposalTitle: "Build a calmer digital desk", direction: "brand_to_creator", status: "Pending", campaignId: "campaign-digital-desk", campaignTitle: "Build a calmer digital desk", participantName: "Vihaan Roy", participantInitials: "VR", city: "Kolkata", amount: "₹35,000", deliverables: "1 long video + 2 short cutdowns", message: "Please include a real workflow example.", updatedAt: "Sep 21, 2026" },
+  { id: "proposal-open-air-declined", proposalTitle: "Move more without making it complicated", direction: "brand_to_creator", status: "Declined", campaignId: "campaign-open-air-move", campaignTitle: "Move more without making it complicated", participantName: "Advait Joshi", participantInitials: "AJ", city: "Ahmedabad", amount: "₹9,000", deliverables: "2 short videos", message: "A previous proposal was not selected.", updatedAt: "Sep 10, 2026" },
+];
+
+export const demoContentIdeas: ContentIdea[] = [
+  { id: "idea-desk-reset", title: "Three desk resets that save time", description: "A practical before-and-after reel with one small change per cut.", concept: "Show three small desk changes that make a busy morning easier.", ideaNotes: "Keep the first frame quiet and use a visible before/after transition.", platform: "Instagram", archived: false, projectId: "project-desk-reset", budget: "₹12K", reminderDate: dateKey(2), shootLocation: "Home office", equipment: "Phone, tripod, soft light", sourceUrl: "https://www.instagram.com/", attachment: ideaImageAttachment("idea-desk-reset-reference", "desk-reset-reference.jpg", creatorMedia.desk), notes: [{ id: "idea-desk-reset-note", text: LONG_COPY, createdAt: "Sep 20, 2026" }] },
+  { id: "idea-city-story", title: "The story behind one local bite", description: "Pair a quick recipe or review with the person who makes it special.", concept: "A short maker-led food story from one Delhi neighbourhood.", ideaNotes: "Ask for permission before filming the kitchen or maker.", platform: "YouTube", archived: false, projectId: "project-city-story", budget: "₹14K", reminderDate: dateKey(5), shootLocation: "Old Delhi", equipment: "Phone, wireless mic, small LED", sourceUrl: "https://www.youtube.com/", notes: [{ id: "idea-city-story-note", text: "Confirm location access and a quiet interview corner.", createdAt: "Sep 19, 2026" }] },
+  { id: "idea-morning-routine", title: "A slower morning routine", description: "Share a grounded morning ritual with a clean, calm visual language.", concept: "A calm routine told through small choices instead of a product catalogue.", ideaNotes: "Leave space for captions and natural room sound.", platform: "Instagram", archived: false, projectId: "project-morning-routine", budget: "₹16K", reminderDate: dateKey(8), shootLocation: "Bengaluru apartment", equipment: "Phone, tripod, window light", sourceUrl: "https://www.instagram.com/", attachment: ideaImageAttachment("idea-morning-reference", "morning-reference.jpg", creatorMedia.wellness) },
+  { id: "idea-beauty-explainer", title: "Ingredient stories that make skincare clearer", description: LONG_COPY, concept: "Explain one ingredient through a simple, visual story.", ideaNotes: LONG_COPY, platform: "Instagram", archived: false, projectId: "project-beauty-explainer", budget: "₹24K", reminderDate: dateKey(12), shootLocation: "Pune studio", equipment: "Phone, macro lens, daylight lamp", sourceUrl: "https://www.instagram.com/", attachment: ideaImageAttachment("idea-beauty-reference", "ingredient-reference.jpg", creatorMedia.beauty) },
+  { id: "idea-digital-desk", title: "Build a calmer digital desk", description: "Show one workflow change that helps a busy audience stay focused.", concept: "A practical productivity story with a real working setup.", ideaNotes: "Capture screen-free opening shots first.", platform: "YouTube", archived: false, projectId: "project-digital-desk", budget: "₹35K", reminderDate: dateKey(15), shootLocation: "Kolkata workspace", equipment: "Camera, mic, screen capture", sourceUrl: "https://www.youtube.com/" },
+  { id: "idea-thumbnail-study", title: "A better thumbnail study", description: "Compare three thumbnail directions and explain the visual choices.", concept: "A behind-the-scenes design study for creators.", ideaNotes: "Use the same frame so the comparison is useful.", platform: "YouTube", archived: false, projectId: "project-thumbnail-study", budget: "₹9K", reminderDate: dateKey(18), shootLocation: "Home studio", equipment: "Camera, reflector, laptop", sourceUrl: "https://www.youtube.com/" },
+  { id: "idea-scheduled-series", title: "The weekly local food series", description: "A scheduled multi-platform series built around seasonal food stories.", concept: "Publish one local food story every Friday for four weeks.", ideaNotes: "Keep a consistent title treatment across all episodes.", platform: "Instagram", archived: false, projectId: "project-scheduled-series", budget: "₹20K", reminderDate: dateKey(20), shootLocation: "Multiple locations", equipment: "Phone, mic, portable light", sourceUrl: "https://www.instagram.com/" },
+  { id: "idea-old-campaign", title: "Sunday market notes", description: "A finished concept to keep as a reference for future briefs.", platform: "LinkedIn", archived: true, notes: [{ id: "idea-old-note", text: "Archived after the campaign was published.", createdAt: "Aug 01, 2026" }] },
+];
+
+const seedWorkflow = (currentStage: ProductionStage, completedStages: ProductionStage[], draftCurrent = true): WorkflowStep[] => PRODUCTION_STAGES.map((stage) => ({ stage, completed: completedStages.includes(stage), status: completedStages.includes(stage) ? "completed" : stage === currentStage ? (draftCurrent ? "draft" : "current") : "locked" }));
+const project = (input: { id: string; ideaId: string; title: string; description: string; platform: ProductionProject["platform"]; currentStage: ProductionStage; stageData: ProductionStageDataByStage; completedStages: ProductionStage[]; budget?: string; sourceUrl?: string; attachment?: ContentIdeaAttachment; reminderDate?: string; shootLocation?: string; equipment?: string }): ProductionProject => ({ id: input.id, ideaId: input.ideaId, title: input.title, description: input.description, platform: input.platform, budget: input.budget, sourceUrl: input.sourceUrl, attachment: input.attachment, reminderDate: input.reminderDate, dueDate: input.reminderDate, shootLocation: input.shootLocation, equipment: input.equipment, assignedTo: "You", currentStage: input.currentStage, stageData: input.stageData, validationErrors: {}, workflowSteps: seedWorkflow(input.currentStage, input.completedStages), createdAt: isoDate(-20) });
+const baseIdea = (title: string, description: string, notes: string, referenceUrl: string, reminderDate: string, shootLocation: string, equipment: string) => ({ concept: description, title, description, notes, referenceUrl, budget: "₹15K", reminderDate, shootLocation, equipment, attachments: [] });
+
+export const demoProjects: ProductionProject[] = [
+  project({ id: "project-desk-reset", ideaId: "idea-desk-reset", title: "Three desk resets that save time", description: "A practical before-and-after reel with one small change per cut.", platform: "Instagram", currentStage: "Idea", completedStages: [], budget: "₹12K", sourceUrl: "https://www.instagram.com/", reminderDate: dateKey(2), shootLocation: "Home office", equipment: "Phone, tripod, soft light", attachment: imageAttachment("project-desk-image", "desk-reset.jpg", creatorMedia.desk), stageData: { Idea: baseIdea("Three desk resets that save time", "A practical before-and-after reel with one small change per cut.", "Keep the first frame quiet and use a visible before/after transition.", "https://www.instagram.com/", dateKey(2), "Home office", "Phone, tripod, soft light") } }),
+  project({ id: "project-city-story", ideaId: "idea-city-story", title: "The story behind one local bite", description: "Pair a quick recipe or review with the person who makes it special.", platform: "YouTube", currentStage: "Scripting", completedStages: ["Idea"], budget: "₹14K", sourceUrl: "https://www.youtube.com/", reminderDate: dateKey(5), shootLocation: "Old Delhi", equipment: "Phone, wireless mic, small LED", stageData: { Idea: baseIdea("The story behind one local bite", "Pair a quick recipe or review with the person who makes it special.", "Confirm location access and a quiet interview corner.", "https://www.youtube.com/", dateKey(5), "Old Delhi", "Phone, wireless mic, small LED"), Scripting: { hook: "Every neighbourhood has one bite worth crossing the city for.", script: LONG_SCRIPT, cta: "Save this route for your next food walk.", caption: "A local story, one plate, and the person who makes it special.", notes: "Keep the maker's voice at the centre." } } }),
+  project({ id: "project-morning-routine", ideaId: "idea-morning-routine", title: "A slower morning routine", description: "Share a grounded morning ritual with a clean, calm visual language.", platform: "Instagram", currentStage: "Shooting", completedStages: ["Idea", "Scripting"], budget: "₹16K", sourceUrl: "https://www.instagram.com/", reminderDate: dateKey(8), shootLocation: "Bengaluru apartment", equipment: "Phone, tripod, window light", stageData: { Idea: baseIdea("A slower morning routine", "Share a grounded morning ritual with a clean, calm visual language.", "Leave space for captions and natural room sound.", "https://www.instagram.com/", dateKey(8), "Bengaluru apartment", "Phone, tripod, window light"), Scripting: { hook: "A morning can be useful without being rushed.", script: "Open with the window, then three small choices that make the morning feel grounded.", cta: "Try one small change tomorrow.", caption: "A slower morning, built one small choice at a time.", notes: "Use natural sound under the voiceover." }, Shooting: { shootDate: dateKey(3), shootLocation: "Bengaluru apartment", equipment: "Phone, tripod, window light", shotNotes: LONG_COPY, assetsReference: "https://www.instagram.com/", attachments: [imageAttachment("project-morning-shot", "morning-shot-list.jpg", creatorMedia.wellness)] } } }),
+  project({ id: "project-beauty-explainer", ideaId: "idea-beauty-explainer", title: "Ingredient stories that make skincare clearer", description: LONG_COPY, platform: "Instagram", currentStage: "Editing", completedStages: ["Idea", "Scripting", "Shooting"], budget: "₹24K", sourceUrl: "https://www.instagram.com/", reminderDate: dateKey(12), shootLocation: "Pune studio", equipment: "Phone, macro lens, daylight lamp", stageData: { Idea: baseIdea("Ingredient stories that make skincare clearer", LONG_COPY, LONG_COPY, "https://www.instagram.com/", dateKey(12), "Pune studio", "Phone, macro lens, daylight lamp"), Scripting: { hook: "Skincare labels should make more sense, not less.", script: LONG_SCRIPT, cta: "Save this explainer for your next routine review.", caption: LONG_COPY, notes: LONG_COPY }, Shooting: { shootDate: dateKey(4), shootLocation: "Pune studio", equipment: "Phone, macro lens, daylight lamp", shotNotes: LONG_COPY, assetsReference: "https://www.instagram.com/", attachments: [imageAttachment("project-beauty-shot", "ingredient-closeup.jpg", creatorMedia.beauty)] }, Editing: { editingNotes: LONG_COPY, editor: "Riya Kapoor", status: "First cut in review", assetUrl: "https://www.youtube.com/watch?v=ScMzIvxBSi4", revisionNotes: "Keep captions readable and leave a pause before the CTA.", attachments: [videoAttachment("project-beauty-edit", "first-cut.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")] } } }),
+  project({ id: "project-digital-desk", ideaId: "idea-digital-desk", title: "Build a calmer digital desk", description: "Show one workflow change that helps a busy audience stay focused.", platform: "YouTube", currentStage: "Thumbnail", completedStages: ["Idea", "Scripting", "Shooting", "Editing"], budget: "₹35K", sourceUrl: "https://www.youtube.com/", reminderDate: dateKey(15), shootLocation: "Kolkata workspace", equipment: "Camera, mic, screen capture", stageData: { Idea: baseIdea("Build a calmer digital desk", "Show one workflow change that helps a busy audience stay focused.", "Capture screen-free opening shots first.", "https://www.youtube.com/", dateKey(15), "Kolkata workspace", "Camera, mic, screen capture"), Scripting: { hook: "Your desk is not the problem; the handoff is.", script: "A practical workflow example from an ordinary workday.", cta: "Share this with the teammate who owns the next handoff.", caption: "A calmer digital desk starts with one clearer handoff.", notes: "Keep the example specific." }, Shooting: { shootDate: dateKey(6), shootLocation: "Kolkata workspace", equipment: "Camera, mic, screen capture", shotNotes: "Capture the setup, screen, and a clean handoff close-up.", assetsReference: "https://www.youtube.com/" }, Editing: { editingNotes: "Tighten the setup and keep the screen capture readable.", editor: "Vihaan Roy", status: "Approved for thumbnail", assetUrl: "https://www.youtube.com/watch?v=ysz5S6PUM-U", revisionNotes: "Use the alternate intro for the first 10 seconds." }, Thumbnail: { thumbnailUrl: "https://images.unsplash.com/photo-1492724441997-5dc865305da7?auto=format&fit=crop&w=900&q=80", notes: LONG_COPY, revisionInfo: "Version 3: stronger title contrast.", attachments: [imageAttachment("project-desk-thumbnail", "digital-desk-thumbnail.jpg", creatorMedia.studio)] } } }),
+  project({ id: "project-scheduled-series", ideaId: "idea-scheduled-series", title: "The weekly local food series", description: "A scheduled multi-platform series built around seasonal food stories.", platform: "Instagram", currentStage: "Scheduled", completedStages: ["Idea", "Scripting", "Shooting", "Editing", "Thumbnail"], budget: "₹20K", sourceUrl: "https://www.instagram.com/", reminderDate: dateKey(20), shootLocation: "Multiple locations", equipment: "Phone, mic, portable light", stageData: { Idea: baseIdea("The weekly local food series", "A scheduled multi-platform series built around seasonal food stories.", "Keep a consistent title treatment across all episodes.", "https://www.instagram.com/", dateKey(20), "Multiple locations", "Phone, mic, portable light"), Scripting: { hook: "Every Friday has a local story waiting.", script: "Four episodes, four makers, one consistent invitation to explore nearby.", cta: "Follow for the next local stop.", caption: "A weekly local food story, starting close to home.", notes: "Keep each episode under 45 seconds." }, Shooting: { shootDate: dateKey(7), shootLocation: "Multiple locations", equipment: "Phone, mic, portable light", shotNotes: "Capture a wide, a maker detail, and one serving moment for every episode.", assetsReference: "https://www.instagram.com/" }, Editing: { editingNotes: "Match the first three cuts and leave room for captions.", editor: "You", status: "Final export ready", assetUrl: "https://www.youtube.com/watch?v=aqz-KE-bpKQ", revisionNotes: "No open revisions." }, Thumbnail: { thumbnailUrl: "https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=900&q=80", notes: "Use the same warm title treatment for every episode.", revisionInfo: "Approved." }, Scheduled: { scheduledDate: dateKey(20), scheduledTime: "7:30 PM", platform: "Instagram", publishingNotes: LONG_COPY, attachments: [fileAttachment("project-series-calendar", "series-publishing-calendar.pdf", "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf")] } } }),
+  project({ id: "project-published-routine", ideaId: "idea-morning-routine", title: "A slower morning routine — published", description: "A completed morning ritual project with final publishing information.", platform: "Instagram", currentStage: "Published", completedStages: [...PRODUCTION_STAGES], budget: "₹16K", sourceUrl: "https://www.instagram.com/", reminderDate: dateKey(-5), shootLocation: "Bengaluru apartment", equipment: "Phone, tripod, window light", stageData: { Idea: baseIdea("A slower morning routine — published", "A completed morning ritual project with final publishing information.", "The final concept was approved after one round of notes.", "https://www.instagram.com/", dateKey(-5), "Bengaluru apartment", "Phone, tripod, window light"), Scripting: { hook: "A morning can be useful without being rushed.", script: "The final script follows three small choices and a gentle close.", cta: "Try one small change tomorrow.", caption: "A slower morning, built one small choice at a time.", notes: "Final captions approved." }, Shooting: { shootDate: dateKey(-14), shootLocation: "Bengaluru apartment", equipment: "Phone, tripod, window light", shotNotes: "Final takes captured with natural room sound.", assetsReference: "https://www.instagram.com/" }, Editing: { editingNotes: "Final cut approved.", editor: "Meera Nair", status: "Published", assetUrl: "https://www.youtube.com/watch?v=ScMzIvxBSi4", revisionNotes: "No revisions outstanding." }, Thumbnail: { thumbnailUrl: "https://images.unsplash.com/photo-1506126613408-eca07ce68773?auto=format&fit=crop&w=900&q=80", notes: "Final thumbnail exported.", revisionInfo: "Approved." }, Scheduled: { scheduledDate: dateKey(-5), scheduledTime: "8:00 AM", platform: "Instagram", publishingNotes: "Scheduled and confirmed with the brand." }, Published: { publishedUrl: "https://www.instagram.com/", publishedDate: dateKey(-5), publishedTime: "8:00 AM", platform: "Instagram", finalNotes: LONG_COPY, status: "Live", attachments: [videoAttachment("project-published-video", "published-routine.mp4", "https://www.youtube.com/watch?v=ScMzIvxBSi4")] } } }),
+];
+
+const creatorById = (id: string) => demoInfluencers.find((creator) => creator.id === id) ?? demoInfluencers[0];
+const application = (input: MarketplaceApplication): MarketplaceApplication => input;
+
+export const demoApplications: MarketplaceApplication[] = [
+  application({ id: "application-aarohi-goodground", briefId: "brief-goodground-reset", campaignId: "campaign-weekend-reset", brandId: "brand-goodground-co", direction: "creator-to-brand", requestId: "request-aarohi-goodground", briefTitle: "Weekend reset with Goodground", brandName: "Goodground Co.", brandInitials: "GC", creatorId: "creator-aarohi-shah", creatorName: "Aarohi Shah", creatorInitials: "AS", creatorProfile: creatorById("creator-aarohi-shah"), contactShared: false, responses: { hook: "A Sunday reset in three tiny changes: clear the desk, plan one meal, and leave space for rest.", reference: "https://www.instagram.com/" }, attachments: [imageAttachment("application-aarohi-work", "weekend-reset-reference.jpg", creatorMedia.desk)], status: "Pending", submittedAt: "Sep 24, 2026", conversationId: "market-chat-aarohi-goodground", message: "Hi Goodground Co., I have shared a practical weekend reset angle with a quick reference board." }),
+  application({ id: "application-kabir-city-bites", briefId: "brief-city-bites", campaignId: "campaign-city-bites", brandId: "brand-ladle-leaf", direction: "creator-to-brand", requestId: "request-kabir-city-bites", briefTitle: "Three city bites worth the detour", brandName: "Ladle & Leaf", brandInitials: "LL", creatorId: "creator-kabir-mehta", creatorName: "Kabir Mehta", creatorInitials: "KM", creatorProfile: creatorById("creator-kabir-mehta"), contactShared: true, responses: { location: "Old Delhi", portfolio: "https://www.youtube.com/" }, attachments: [videoAttachment("application-kabir-work", "city-guide.mp4", "https://www.youtube.com/watch?v=aqz-KE-bpKQ")], status: "Accepted", submittedAt: "Sep 20, 2026", conversationId: "market-chat-kabir-city-bites", message: "I can deliver a neighbourhood-first guide with a strong opening hook." }),
+  application({ id: "application-meera-morrow", briefId: "brief-morrow-morning", campaignId: "campaign-morning-routine", brandId: "brand-morrow-studio", direction: "creator-to-brand", requestId: "request-meera-morrow", briefTitle: "A slower morning routine", brandName: "Morrow Studio", brandInitials: "MS", creatorId: "creator-meera-nair", creatorName: "Meera Nair", creatorInitials: "MN", creatorProfile: creatorById("creator-meera-nair"), contactShared: true, responses: { routine: "A quiet three-step start with water, light, and one page of writing." }, attachments: [], status: "Declined", submittedAt: "Sep 12, 2026", conversationId: "market-chat-meera-morrow", message: "I would love to bring a grounded, creator-led routine to this brief.", rejectionReason: "We moved forward with a different production window this time.", canReapply: true }),
+  application({ id: "application-riya-glow", briefId: "brief-campaign-glow-ingredients", campaignId: "campaign-glow-ingredients", brandId: "brand-glow-theory", direction: "creator-to-brand", requestId: "request-riya-glow", briefTitle: "Ingredient stories that make skincare clearer", brandName: "Glow Theory", brandInitials: "GT", creatorId: "creator-riya-kapoor", creatorName: "Riya Kapoor", creatorInitials: "RK", creatorProfile: creatorById("creator-riya-kapoor"), contactShared: false, responses: { hook: "Skincare labels should make more sense, not less.", reference: "https://www.instagram.com/" }, attachments: [], status: "Declined", submittedAt: "Sep 08, 2026", conversationId: "market-chat-riya-glow", message: "Sharing a clear, visual way to explain ingredients.", rejectionReason: "The current shortlist is complete for this campaign.", canReapply: false }),
+  application({ id: "application-sana-goodground", briefId: "brief-goodground-family", campaignId: "campaign-weekend-reset", brandId: "brand-goodground-co", direction: "brand-to-creator", requestId: "request-sana-goodground", briefTitle: "Weekend reset with Goodground", brandName: "Goodground Co.", brandInitials: "GC", creatorId: "creator-sana-ali", creatorName: "Sana Ali", creatorInitials: "SA", creatorProfile: creatorById("creator-sana-ali"), contactShared: true, responses: { message: "A warm family routine with one useful change." }, attachments: [], status: "Accepted", submittedAt: "Sep 18, 2026", conversationId: "market-chat-sana-goodground", message: "We would love to invite you to the family-focused version of this campaign." }),
+  application({ id: "application-advait-open-air", briefId: "brief-open-air-move", campaignId: "campaign-open-air-move", brandId: "brand-open-air", direction: "brand-to-creator", requestId: "request-advait-open-air", briefTitle: "Move more without making it complicated", brandName: "Open Air", brandInitials: "OA", creatorId: "creator-advait-joshi", creatorName: "Advait Joshi", creatorInitials: "AJ", creatorProfile: creatorById("creator-advait-joshi"), contactShared: false, responses: { message: "A simple outdoor movement series for people starting again." }, attachments: [], status: "Blocked", submittedAt: "Sep 06, 2026", conversationId: "market-chat-advait-open-air", message: "This creator relationship is blocked for the campaign.", rejectionReason: "Campaign-specific block applied.", canReapply: false }),
+  application({ id: "application-zoya-threadline", briefId: "brief-maker-morning", campaignId: "campaign-maker-morning", brandId: "brand-threadline", direction: "brand-to-creator", requestId: "request-zoya-threadline", briefTitle: "A maker's morning", brandName: "Threadline", brandInitials: "TL", creatorId: "creator-zoya-khan", creatorName: "Zoya Khan", creatorInitials: "ZK", creatorProfile: creatorById("creator-zoya-khan"), contactShared: false, responses: { message: "We would love to send a craft story request for this campaign." }, attachments: [], status: "Pending", submittedAt: "Sep 23, 2026", conversationId: "market-chat-zoya-threadline", message: "We would love to invite you to share a maker's morning." }),
+  application({ id: "application-isha-travel-history", briefId: "brief-city-bites", campaignId: "campaign-city-bites", brandId: "brand-ladle-leaf", direction: "creator-to-brand", requestId: "request-isha-city-bites", briefTitle: "Three city bites worth the detour", brandName: "Ladle & Leaf", brandInitials: "LL", creatorId: "creator-isha-verma", creatorName: "Isha Verma", creatorInitials: "IV", creatorProfile: creatorById("creator-isha-verma"), contactShared: false, responses: { location: "A heritage food route with independent makers." }, attachments: [], status: "Declined", submittedAt: "Sep 01, 2026", conversationId: "market-chat-isha-city-bites", message: "A previous application is kept as history.", rejectionReason: "Please reapply when the next city route opens.", canReapply: true }),
+];
+
+const messagesFor = (item: MarketplaceApplication): MarketplaceConversation["messages"] => {
+  const base = [{ id: `${item.conversationId}-request`, text: item.message, mine: item.direction === "creator-to-brand", senderRole: item.direction === "creator-to-brand" ? "Influencer" as const : "Brand" as const, time: "10:42 AM", status: "seen" as const }];
+  if (item.status !== "Accepted") return base;
+  return [...base, { id: `${item.conversationId}-reply`, text: "Thanks for the thoughtful application. The direction feels aligned with the brief.", mine: !base[0].mine, senderRole: base[0].mine ? "Brand" as const : "Influencer" as const, time: "11:05 AM", status: "seen" as const }, { id: `${item.conversationId}-details`, text: LONG_COPY, mine: base[0].mine, senderRole: base[0].mine ? "Influencer" as const : "Brand" as const, time: "11:24 AM", status: "delivered" as const, attachments: item.attachments }, { id: `${item.conversationId}-brief`, text: "The video brief is attached here so the production details stay easy to find.", mine: !base[0].mine, senderRole: base[0].mine ? "Brand" as const : "Influencer" as const, time: "11:42 AM", status: "seen" as const, videoBriefId: item.campaignId === "campaign-city-bites" ? "brief-video-city-bites" : "brief-video-goodground" }];
+};
+
+export const demoMarketplaceConversations: MarketplaceConversation[] = demoApplications.map((item) => ({ id: item.conversationId, requestId: item.requestId, applicationId: item.id, campaignId: item.campaignId, brandId: item.brandId, creatorId: item.creatorId, direction: item.direction, participantName: item.creatorName, participantInitials: item.creatorInitials, briefTitle: item.briefTitle, preview: item.message, status: item.status, blockedBy: item.status === "Blocked" ? ["brand"] : [], updatedAt: item.submittedAt, messages: messagesFor(item) }));
+
+export const demoMarketplaceBlocks: MarketplaceBlock[] = [
+  { id: "brand-open-air:creator-advait-joshi:campaign-open-air-move", campaignId: "campaign-open-air-move", brandId: "brand-open-air", creatorId: "creator-advait-joshi", createdAt: "2026-09-06T10:00:00.000Z" },
 ];

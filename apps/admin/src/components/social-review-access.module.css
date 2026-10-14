@@ -1,0 +1,1 @@
+.actions{display:flex;align-items:center;gap:10px}.access{border:0;padding:0;color:var(--color-danger);background:transparent;font-size:11px;font-weight:750;white-space:nowrap}.access:disabled{opacity:.5}@media(max-width:680px){.actions{width:100%;margin-left:54px}}

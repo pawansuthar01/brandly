@@ -3,11 +3,25 @@ node_modules/
 dist/
 coverage/
 .next/
+*.tsbuildinfo
 .expo/
 *.log
 .env
 .env.*
 !.env.example
+apps/api/uploads/
 ios/
 android/
 !.gitkeep
+
+# Local Expo module sources are required in native builds.
+!apps/mobile/modules/reminder-native/android/
+!apps/mobile/modules/reminder-native/android/**
+!apps/mobile/modules/reminder-native/ios/
+!apps/mobile/modules/reminder-native/ios/**
+apps/mobile/modules/reminder-native/android/build/
+apps/mobile/modules/reminder-native/android/.gradle/
+apps/mobile/credentials.json
+apps/mobile/credentials/
+apps/mobile/brandly-fb81b-firebase-adminsdk-fbsvc-5ed906ac66.json
+google-services.json

@@ -118,3 +118,698 @@ model LocationImportRun {
   @@index([source, startedAt])
   @@map("location_import_runs")
 }
+
+enum UserRole {
+  BRAND
+  CREATOR
+  ADMIN
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum CampaignStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  ARCHIVED
+}
+
+enum CampaignVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum CampaignApplicationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  WITHDRAWN
+}
+
+enum AuthChallengePurpose {
+  SIGN_IN
+  SIGN_UP
+  PHONE_VERIFY
+}
+
+enum AuthChallengeChannel {
+  WHATSAPP
+  EMAIL
+}
+
+enum ProfileVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum ProfileInteractionType {
+  SAVED
+  BLOCKED
+  COMPARED
+}
+
+enum SocialVerificationStatus {
+  UNVERIFIED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum NotificationChannel {
+  PUSH
+  WHATSAPP
+  EMAIL
+}
+
+enum TaskReminderStatus {
+  NONE
+  PENDING
+  SENDING
+  SENT
+  STOPPED
+  FAILED
+}
+
+model User {
+  id                    String                @id @default(uuid()) @db.Uuid
+  role                  UserRole
+  status                UserStatus            @default(ACTIVE)
+  suspensionReason      String?               @map("suspension_reason")
+  suspendedAt           DateTime?             @map("suspended_at")
+  email                 String?               @unique
+  phoneE164             String?               @unique @map("phone_e164")
+  phoneVerifiedAt       DateTime?             @map("phone_verified_at")
+  emailVerifiedAt       DateTime?             @map("email_verified_at")
+  onboardingCompletedAt DateTime?             @map("onboarding_completed_at")
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+  profile               UserProfile?
+  socialAccounts        SocialAccount[]
+  contentVerifications  ContentVerification[]
+  authChallenges        AuthChallenge[]
+  refreshTokens         RefreshToken[]
+  devices               DeviceToken[]
+  notifications         Notification[]
+  createdTasks          Task[]                @relation("TaskCreatedBy")
+  brandTasks            Task[]                @relation("TaskBrand")
+  creatorTasks          Task[]                @relation("TaskCreator")
+  taskActivities        TaskActivity[]        @relation("TaskActivityActor")
+  taskRecipients        TaskRecipient[]
+  studioIdeas           StudioIdea[]          @relation("StudioIdeaOwner")
+  studioProjects        StudioProject[]       @relation("StudioProjectOwner")
+  brandCampaigns        Campaign[]            @relation("CampaignBrand")
+  campaignApplications  CampaignApplication[] @relation("CampaignCreator")
+  profileInteractions   ProfileInteraction[]  @relation("ProfileInteractionOwner")
+  receivedInteractions  ProfileInteraction[]  @relation("ProfileInteractionTarget")
+  chatMessages          ChatMessage[]         @relation("ChatMessageSender")
+  adminChatThreads      AdminChatConversation[] @relation("AdminChatUser")
+  adminChatMessages     AdminChatMessage[]     @relation("AdminChatMessageSender")
+  authoredCampaignReviews CampaignReview[] @relation("CampaignReviewAuthor")
+  receivedCampaignReviews CampaignReview[] @relation("CampaignReviewSubject")
+  reactivationRequests  AccountReactivationRequest[]
+
+  @@index([role, status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+enum AccountReactivationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model AccountReactivationRequest {
+  id             String                     @id @default(uuid()) @db.Uuid
+  userId         String                     @map("user_id") @db.Uuid
+  message        String
+  status         AccountReactivationStatus  @default(PENDING)
+  reviewerId     String?                    @map("reviewer_id")
+  reviewedAt     DateTime?                  @map("reviewed_at")
+  resolutionNote String?                    @map("resolution_note")
+  createdAt      DateTime                   @default(now()) @map("created_at")
+  updatedAt      DateTime                   @updatedAt @map("updated_at")
+  user           User                       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt, id])
+  @@index([userId, createdAt])
+  @@map("account_reactivation_requests")
+}
+
+model UserProfile {
+  userId           String            @id @map("user_id") @db.Uuid
+  displayName      String            @map("display_name")
+  bio              String            @default("")
+  city             String            @default("")
+  focus            String            @default("")
+  avatarUrl        String?           @map("avatar_url")
+  websiteUrl       String?           @map("website_url")
+  audienceSize     String?           @map("audience_size")
+  rateRange        String?           @map("rate_range")
+  teamSize         String?           @map("team_size")
+  visibility       ProfileVisibility @default(PRIVATE)
+  languages        Json?
+  locations        Json?
+  socialLinks      Json?             @map("social_links")
+  onboardingStep   String            @default("profile") @map("onboarding_step")
+  profileCompleted Int               @default(0) @map("profile_completed")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  updatedAt        DateTime          @updatedAt @map("updated_at")
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model ProfileInteraction {
+  id        String                 @id @default(uuid()) @db.Uuid
+  ownerId   String                 @map("owner_id") @db.Uuid
+  targetId  String                 @map("target_id") @db.Uuid
+  type      ProfileInteractionType
+  createdAt DateTime               @default(now()) @map("created_at")
+  updatedAt DateTime               @updatedAt @map("updated_at")
+  owner     User                   @relation("ProfileInteractionOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  target    User                   @relation("ProfileInteractionTarget", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerId, targetId, type])
+  @@index([ownerId, type, updatedAt])
+  @@index([targetId, type, updatedAt])
+  @@map("profile_interactions")
+}
+
+model AuthChallenge {
+  id          String               @id @default(uuid()) @db.Uuid
+  userId      String?              @map("user_id") @db.Uuid
+  destination String
+  channel     AuthChallengeChannel
+  purpose     AuthChallengePurpose
+  codeHash    String               @map("code_hash")
+  expiresAt   DateTime             @map("expires_at")
+  consumedAt  DateTime?            @map("consumed_at")
+  attempts    Int                  @default(0)
+  requestId   String               @map("request_id")
+  createdAt   DateTime             @default(now()) @map("created_at")
+  user        User?                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([destination, purpose, createdAt])
+  @@index([expiresAt])
+  @@map("auth_challenges")
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("refresh_tokens")
+}
+
+model SocialAccount {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  userId             String                   @map("user_id") @db.Uuid
+  platform           String
+  handle             String
+  profileUrl         String?                  @map("profile_url")
+  displayName        String?                  @map("display_name")
+  followerCount      Int?                     @map("follower_count")
+  followingCount     Int?                     @map("following_count")
+  postCount          Int?                     @map("post_count")
+  profileImageUrl    String?                  @map("profile_image_url")
+  profileMetadata    Json?                    @map("profile_metadata")
+  syncStatus         String                   @default("IDLE") @map("sync_status")
+  syncError          String?                  @map("sync_error")
+  lastSyncedAt       DateTime?                @map("last_synced_at")
+  verificationMethod String?                  @map("verification_method")
+  verificationStatus SocialVerificationStatus @default(UNVERIFIED) @map("verification_status")
+  verifiedAt         DateTime?                @map("verified_at")
+  reviewedAt         DateTime?                @map("reviewed_at")
+  reviewedBy         String?                  @map("reviewed_by")
+  reviewerNote       String?                  @map("reviewer_note")
+  createdAt          DateTime                 @default(now()) @map("created_at")
+  updatedAt          DateTime                 @updatedAt @map("updated_at")
+  user               User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  verifications      ContentVerification[]
+
+  @@unique([userId, platform])
+  @@index([platform, verificationStatus])
+  @@index([syncStatus, lastSyncedAt])
+  @@map("social_accounts")
+}
+
+model ContentVerification {
+  id              String                   @id @default(uuid()) @db.Uuid
+  userId          String                   @map("user_id") @db.Uuid
+  socialAccountId String?                  @map("social_account_id") @db.Uuid
+  contentType     String                   @map("content_type")
+  contentUrl      String                   @map("content_url")
+  status          SocialVerificationStatus @default(PENDING)
+  reviewerNote    String?                  @map("reviewer_note")
+  reviewedAt      DateTime?                @map("reviewed_at")
+  createdAt       DateTime                 @default(now()) @map("created_at")
+  updatedAt       DateTime                 @updatedAt @map("updated_at")
+  user            User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccount   SocialAccount?           @relation(fields: [socialAccountId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@map("content_verifications")
+}
+
+model DeviceToken {
+  id                     String   @id @default(uuid()) @db.Uuid
+  userId                 String   @map("user_id") @db.Uuid
+  token                  String   @unique
+  platform               String
+  appVersion             String?  @map("app_version")
+  supportsLocalReminders Boolean  @default(false) @map("supports_local_reminders")
+  sessionActive          Boolean  @default(false) @map("session_active")
+  lastSeenAt             DateTime @default(now()) @map("last_seen_at")
+  createdAt              DateTime @default(now()) @map("created_at")
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, platform])
+  @@map("device_tokens")
+}
+
+model Notification {
+  id                   String              @id @default(uuid()) @db.Uuid
+  userId               String              @map("user_id") @db.Uuid
+  dedupeKey            String?             @unique @map("dedupe_key")
+  channel              NotificationChannel
+  type                 String
+  title                String
+  body                 String
+  data                 Json?
+  sound                String?
+  channelId            String?             @map("channel_id")
+  categoryIdentifier   String?             @map("category_identifier")
+  preferLocalDelivery  Boolean             @default(false) @map("prefer_local_delivery")
+  provider             String?
+  providerTicketIds    Json?               @map("provider_ticket_ids")
+  providerTicketTokens Json?               @map("provider_ticket_tokens")
+  deliveryStatus       String              @default("PENDING") @map("delivery_status")
+  acceptedAt           DateTime?           @map("accepted_at")
+  receiptCheckedAt     DateTime?           @map("receipt_checked_at")
+  nextReceiptCheckAt   DateTime?           @map("next_receipt_check_at")
+  deliveryAttempts     Int                 @default(0) @map("delivery_attempts")
+  lastDeliveryError    String?             @map("last_delivery_error")
+  readAt               DateTime?           @map("read_at")
+  deliveredAt          DateTime?           @map("delivered_at")
+  createdAt            DateTime            @default(now()) @map("created_at")
+  user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@index([channel, deliveryStatus, nextReceiptCheckAt])
+  @@map("notifications")
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid()) @db.Uuid
+  type          String
+  aggregateType String    @map("aggregate_type")
+  aggregateId   String    @map("aggregate_id") @db.Uuid
+  dedupeKey     String    @unique @map("dedupe_key")
+  payload       Json
+  status        String    @default("PENDING")
+  availableAt   DateTime  @default(now()) @map("available_at")
+  lockedAt      DateTime? @map("locked_at")
+  attempts      Int       @default(0)
+  processedAt   DateTime? @map("processed_at")
+  lastError     String?   @map("last_error")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, availableAt])
+  @@index([aggregateType, aggregateId])
+  @@map("outbox_events")
+}
+
+model AppSetting {
+  key            String   @id
+  encryptedValue String   @map("encrypted_value")
+  nonce          String
+  authTag        String   @map("auth_tag")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+
+model AppThemeDraft {
+  id        String   @id @default(uuid()) @db.Uuid
+  scope     String
+  name      String
+  document  Json
+  changeNote String  @default("") @map("change_note")
+  revision  Int      @default(1)
+  publishedRevision Int? @map("published_revision")
+  updatedBy String   @map("updated_by")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@unique([scope, name])
+  @@index([scope, updatedAt, id])
+  @@map("app_theme_drafts")
+}
+
+model AppThemeVersion {
+  id          String   @id @default(uuid()) @db.Uuid
+  scope       String
+  name        String
+  revision    Int
+  document    Json
+  changeNote  String   @default("") @map("change_note")
+  sourceId    String?  @map("source_id") @db.Uuid
+  authorId    String   @map("author_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  activations AppThemeActivation[]
+  @@unique([scope, name, revision])
+  @@index([scope, createdAt, id])
+  @@map("app_theme_versions")
+}
+
+model AppThemeActivation {
+  id        String   @id @default(uuid()) @db.Uuid
+  scope     String
+  versionId String   @map("version_id") @db.Uuid
+  actorId   String   @map("actor_id")
+  action    String
+  createdAt DateTime @default(now()) @map("created_at")
+  version   AppThemeVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  @@index([scope, createdAt, id])
+  @@map("app_theme_activations")
+}
+
+model AppThemeCurrent {
+  scope     String   @id
+  versionId String   @map("version_id") @db.Uuid
+  actorId   String   @map("actor_id")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@map("app_theme_current")
+}
+
+model Task {
+  id                     String             @id @default(uuid()) @db.Uuid
+  kind                   String             @default("task")
+  title                  String
+  notes                  String             @default("")
+  dueDate                String             @map("due_date")
+  dueTime                String             @map("due_time")
+  dueAt                  DateTime?          @map("due_at")
+  reminderEnabled        Boolean            @default(false) @map("reminder_enabled")
+  reminderTone           String             @default("default") @map("reminder_tone")
+  reminderStatus         TaskReminderStatus @default(NONE) @map("reminder_status")
+  reminderGeneration     Int                @default(0) @map("reminder_generation")
+  reminderUpcomingSentAt DateTime?          @map("reminder_upcoming_sent_at")
+  reminderSentAt         DateTime?          @map("reminder_sent_at")
+  reminderStoppedAt      DateTime?          @map("reminder_stopped_at")
+  reminderClaimedAt      DateTime?          @map("reminder_claimed_at")
+  reminderAttempts       Int                @default(0) @map("reminder_attempts")
+  lastReminderError      String?            @map("last_reminder_error")
+  completedAt            DateTime?          @map("completed_at")
+  links                  Json?
+  attachments            Json?
+  projectId              String?            @map("project_id")
+  stage                  String?
+  campaignId             String?            @map("campaign_id")
+  conversationId         String?            @map("conversation_id")
+  sourceTaskId           String?            @map("source_task_id") @db.Uuid
+  createdById            String             @map("created_by_id") @db.Uuid
+  brandId                String?            @map("brand_id") @db.Uuid
+  creatorId              String?            @map("creator_id") @db.Uuid
+  createdAt              DateTime           @default(now()) @map("created_at")
+  updatedAt              DateTime           @updatedAt @map("updated_at")
+  createdBy              User               @relation("TaskCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  brand                  User?              @relation("TaskBrand", fields: [brandId], references: [id], onDelete: SetNull)
+  creator                User?              @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  sourceTask             Task?              @relation("TaskCopies", fields: [sourceTaskId], references: [id], onDelete: SetNull)
+  copies                 Task[]             @relation("TaskCopies")
+  activities             TaskActivity[]
+  recipients             TaskRecipient[]
+
+  @@index([createdById, createdAt])
+  @@index([brandId, dueAt])
+  @@index([creatorId, dueAt])
+  @@index([reminderEnabled, reminderStatus, dueAt])
+  @@map("tasks")
+}
+
+model TaskActivity {
+  id        String   @id @default(uuid()) @db.Uuid
+  taskId    String   @map("task_id") @db.Uuid
+  actorId   String?  @map("actor_id") @db.Uuid
+  action    String
+  message   String?
+  details   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor     User?    @relation("TaskActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([taskId, createdAt])
+  @@map("task_activities")
+}
+
+model TaskRecipient {
+  taskId   String   @map("task_id") @db.Uuid
+  userId   String   @map("user_id") @db.Uuid
+  sharedAt DateTime @default(now()) @map("shared_at")
+  task     Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([taskId, userId])
+  @@index([userId, sharedAt])
+  @@map("task_recipients")
+}
+
+model StudioIdea {
+  id            String         @id @default(uuid()) @db.Uuid
+  ownerId       String         @map("owner_id") @db.Uuid
+  title         String
+  concept       String         @default("")
+  description   String         @default("")
+  ideaNotes     String         @default("") @map("idea_notes")
+  platform      String
+  archived      Boolean        @default(false)
+  budget        String?
+  reminderDate  String?        @map("reminder_date")
+  shootLocation String?        @map("shoot_location")
+  equipment     String?
+  sourceUrl     String?        @map("source_url")
+  attachment    Json?
+  notes         Json?
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  owner         User           @relation("StudioIdeaOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  project       StudioProject? @relation("StudioProjectIdea")
+
+  @@index([ownerId, archived, updatedAt])
+  @@map("studio_ideas")
+}
+
+model StudioProject {
+  id               String     @id @default(uuid()) @db.Uuid
+  ownerId          String     @map("owner_id") @db.Uuid
+  ideaId           String     @unique @map("idea_id") @db.Uuid
+  title            String
+  description      String     @default("")
+  platform         String
+  budget           String?
+  sourceUrl        String?    @map("source_url")
+  attachment       Json?
+  reminderDate     String?    @map("reminder_date")
+  shootLocation    String?    @map("shoot_location")
+  equipment        String?
+  dueDate          String?    @map("due_date")
+  assignedTo       String     @default("You") @map("assigned_to")
+  currentStage     String     @default("Idea") @map("current_stage")
+  workflowSteps    Json       @map("workflow_steps")
+  stageData        Json       @map("stage_data")
+  validationErrors Json       @default("{}") @map("validation_errors")
+  archived         Boolean    @default(false)
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
+  owner            User       @relation("StudioProjectOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  idea             StudioIdea @relation("StudioProjectIdea", fields: [ideaId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId, currentStage, archived])
+  @@map("studio_projects")
+}
+
+model Campaign {
+  id                      String                @id @default(uuid()) @db.Uuid
+  brandId                 String                @map("brand_id") @db.Uuid
+  title                   String
+  description             String
+  targetLocations         Json                  @map("target_locations")
+  category                String
+  budget                  String
+  deadlineAt              DateTime?             @map("deadline_at")
+  status                  CampaignStatus        @default(DRAFT)
+  visibility              CampaignVisibility    @default(PUBLIC)
+  platforms               Json
+  deliverables            String                @default("")
+  requirements            Json
+  creatorRequirements     String                @default("") @map("creator_requirements")
+  media                   Json
+  collaborationVideoUrl   String?               @map("collaboration_video_url")
+  collaborationVideoLabel String?               @map("collaboration_video_label")
+  applicationLimit        Int?                  @map("application_limit")
+  approvalLimit           Int?                  @map("approval_limit")
+  closeOnApplicationLimit Boolean               @default(true) @map("close_on_application_limit")
+  closeOnApprovalLimit    Boolean               @default(true) @map("close_on_approval_limit")
+  publishedAt             DateTime?             @map("published_at")
+  closedAt                DateTime?             @map("closed_at")
+  createdAt               DateTime              @default(now()) @map("created_at")
+  updatedAt               DateTime              @updatedAt @map("updated_at")
+  brand                   User                  @relation("CampaignBrand", fields: [brandId], references: [id], onDelete: Cascade)
+  applications            CampaignApplication[]
+
+  @@index([brandId, status, updatedAt])
+  @@index([status, deadlineAt])
+  @@map("campaigns")
+}
+
+model CampaignApplication {
+  id             String                    @id @default(uuid()) @db.Uuid
+  campaignId     String                    @map("campaign_id") @db.Uuid
+  creatorId      String                    @map("creator_id") @db.Uuid
+  status         CampaignApplicationStatus @default(PENDING)
+  invitedByBrand Boolean                   @default(false) @map("invited_by_brand")
+  message        String                    @default("")
+  responses      Json
+  attachments    Json
+  contactShared  Boolean                   @default(false) @map("contact_shared")
+  rejectionReason String?                  @map("rejection_reason")
+  allowReapply   Boolean                   @default(false) @map("allow_reapply")
+  submittedAt    DateTime                  @default(now()) @map("submitted_at")
+  updatedAt      DateTime                  @updatedAt @map("updated_at")
+  campaign       Campaign                  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  creator        User                      @relation("CampaignCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+  chatMessages   ChatMessage[]
+  history        CampaignApplicationEvent[]
+  payment        CampaignPayment?
+  reviews        CampaignReview[]
+  brandCompletedAt DateTime? @map("brand_completed_at")
+  creatorCompletedAt DateTime? @map("creator_completed_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@unique([campaignId, creatorId])
+  @@index([creatorId, status, updatedAt])
+  @@index([campaignId, status, updatedAt])
+  @@map("campaign_applications")
+}
+
+model CampaignPayment {
+  id            String @id @default(uuid()) @db.Uuid
+  applicationId String @unique @map("application_id") @db.Uuid
+  amount        Decimal @db.Decimal(12, 2)
+  paidAt        DateTime? @map("paid_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  application   CampaignApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([paidAt, updatedAt])
+  @@map("campaign_payments")
+}
+
+model CampaignReview {
+  id            String @id @default(uuid()) @db.Uuid
+  applicationId String @map("application_id") @db.Uuid
+  authorId      String @map("author_id") @db.Uuid
+  subjectId     String @map("subject_id") @db.Uuid
+  rating        Int
+  text          String
+  createdAt     DateTime @default(now()) @map("created_at")
+  application   CampaignApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  author        User @relation("CampaignReviewAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  subject       User @relation("CampaignReviewSubject", fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId, authorId])
+  @@index([subjectId, createdAt])
+  @@index([authorId, createdAt])
+  @@map("campaign_reviews")
+}
+
+model CampaignApplicationEvent {
+  id             String                    @id @default(uuid()) @db.Uuid
+  applicationId  String                    @map("application_id") @db.Uuid
+  campaignId     String                    @map("campaign_id") @db.Uuid
+  creatorId      String                    @map("creator_id") @db.Uuid
+  actorId        String                    @map("actor_id") @db.Uuid
+  actorRole      UserRole                  @map("actor_role")
+  status         CampaignApplicationStatus
+  invitedByBrand Boolean                   @map("invited_by_brand")
+  rejectionReason String?                  @map("rejection_reason")
+  occurredAt     DateTime                  @default(now()) @map("occurred_at")
+  application    CampaignApplication       @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, occurredAt])
+  @@index([campaignId, status, occurredAt])
+  @@index([creatorId, occurredAt])
+  @@map("campaign_application_events")
+}
+
+model ChatMessage {
+  id               String              @id @default(uuid()) @db.Uuid
+  applicationId    String              @map("application_id") @db.Uuid
+  senderId         String              @map("sender_id") @db.Uuid
+  clientMessageId  String?             @map("client_message_id")
+  taskId           String?             @map("task_id") @db.Uuid
+  campaignApplicationId String?        @map("campaign_application_id") @db.Uuid
+  text             String              @default("")
+  attachments      Json?
+  replyToId        String?             @map("reply_to_id") @db.Uuid
+  editedAt         DateTime?           @map("edited_at")
+  deletedAt        DateTime?           @map("deleted_at")
+  deliveredAt      DateTime?           @map("delivered_at")
+  readAt           DateTime?           @map("read_at")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+  application      CampaignApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  sender           User                @relation("ChatMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId, senderId, clientMessageId])
+  @@index([applicationId, createdAt, id])
+  @@index([senderId, createdAt])
+  @@index([taskId])
+  @@index([campaignApplicationId])
+  @@map("chat_messages")
+}
+
+model AdminChatConversation {
+  id        String            @id @default(uuid()) @db.Uuid
+  userId    String            @unique @map("user_id") @db.Uuid
+  createdAt DateTime          @default(now()) @map("created_at")
+  updatedAt DateTime          @updatedAt @map("updated_at")
+  user      User              @relation("AdminChatUser", fields: [userId], references: [id], onDelete: Cascade)
+  messages  AdminChatMessage[]
+
+  @@index([updatedAt])
+  @@map("admin_chat_conversations")
+}
+
+model AdminChatMessage {
+  id              String               @id @default(uuid()) @db.Uuid
+  conversationId  String               @map("conversation_id") @db.Uuid
+  senderId        String               @map("sender_id") @db.Uuid
+  senderRole      UserRole             @map("sender_role")
+  clientMessageId String?              @map("client_message_id")
+  text            String
+  attachments     Json                 @default("[]")
+  readAt          DateTime?            @map("read_at")
+  createdAt       DateTime             @default(now()) @map("created_at")
+  updatedAt       DateTime             @updatedAt @map("updated_at")
+  conversation    AdminChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender          User                 @relation("AdminChatMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, senderId, clientMessageId])
+  @@index([conversationId, createdAt, id])
+  @@index([senderId, createdAt])
+  @@map("admin_chat_messages")
+}

@@ -1,6 +1,9 @@
 import { useState } from "react";
+import { useEffect, useRef } from "react";
 import { Image as ExpoImage } from "expo-image";
 import {
+  AccessibilityInfo,
+  Animated,
   NativeScrollEvent,
   NativeSyntheticEvent,
   Pressable,
@@ -14,102 +17,124 @@ import {
   AppButton,
   AppCard,
   AppIcon,
+  NATIVE_ANIMATIONS_ENABLED,
   Avatar,
   MarketplaceCardSkeleton,
   Pill,
   SectionTitle,
+  Skeleton,
 } from "../../components/ui";
 import { ProposalCard } from "../../components/marketplace";
 import { useDemoMarketplace } from "../../hooks/useDemoMarketplace";
 import { useTheme } from "../../providers/ThemeProvider";
 import { AppTheme } from "../../styles/theme";
+import { createThemeStyles } from "../../styles/createThemeStyles";
 import { HomePromo } from "../../services/demoMarketplace.service";
-import { Campaign, DemoProposal, Influencer } from "../../types/marketplace";
+import { BrandBrief, Campaign, ContentIdea, DemoProposal, Influencer, MarketplaceApplication, TodoTask } from "../../types/marketplace";
+import { ConsistencyChart, HomeTaskOverview, WeeklyPlanner } from "../../components/TaskInsights";
+import { TodoTaskPanel } from "./TodoTask";
+import { brandBriefToCampaign } from "../../lib/marketplace";
 
 const topCategories = [
   {
     label: "Beauty",
     note: "Skincare, makeup & wellness",
-    icon: "sparkles-outline",
-    size: "tall",
+    icon: "color-palette-outline",
+    tone: "butter",
   },
   {
     label: "Fashion",
     note: "Style-led storytelling",
     icon: "shirt-outline",
-    size: "regular",
+    tone: "blush",
   },
   {
     label: "Food",
     note: "Restaurants & product tastings",
     icon: "restaurant-outline",
-    size: "regular",
+    tone: "mint",
   },
   {
     label: "Tech",
     note: "Apps, devices & reviews",
     icon: "phone-portrait-outline",
-    size: "tall",
+    tone: "sky",
   },
   {
     label: "Fitness",
     note: "Movement & healthy living",
     icon: "barbell-outline",
-    size: "regular",
+    tone: "lilac",
   },
   {
     label: "Travel",
     note: "Hotels, stays & local guides",
     icon: "airplane-outline",
-    size: "tall",
+    tone: "sky",
   },
   {
     label: "Gaming",
     note: "Live play & creator reviews",
     icon: "game-controller-outline",
-    size: "regular",
+    tone: "blush",
   },
   {
     label: "Home",
     note: "Interiors, routines & living",
     icon: "home-outline",
-    size: "regular",
+    tone: "mint",
   },
   {
     label: "Family",
     note: "Parenting & everyday life",
     icon: "heart-outline",
-    size: "tall",
-  },
-] as const;
-
-const homeActions = [
-  {
-    id: "discover",
-    icon: "search-outline",
-    title: "Refine your creator search",
-    description: "Use audience, category and location to narrow every match.",
+    tone: "butter",
   },
   {
-    id: "campaigns",
-    icon: "briefcase-outline",
-    title: "Keep a campaign moving",
-    description: "Review active briefs and continue the conversation.",
+    label: "Wellness",
+    note: "Mindful routines & self-care",
+    icon: "leaf-outline",
+    tone: "mint",
+  },
+  {
+    label: "Education",
+    note: "Learning, skills & explainers",
+    icon: "school-outline",
+    tone: "sky",
+  },
+  {
+    label: "Pets",
+    note: "Care, products & pet life",
+    icon: "paw-outline",
+    tone: "lilac",
   },
 ] as const;
 
 type Props = {
   role: "Brand" | "Influencer";
   onScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
-  onDiscover: () => void;
+  onDiscover: (category?: string) => void;
   onInfluencer: (item: Influencer) => void;
   onCampaign: (item?: Campaign) => void;
   onChat: (name: string, initials: string) => void;
+  onOpenApplication?: (application: MarketplaceApplication) => void;
   proposals: DemoProposal[];
   onProposal: (proposal: DemoProposal) => void;
+  onReminderPress: (proposal: DemoProposal) => void;
+  onOpenCampaignVideo: (url: string) => void;
   onProfileEdit: () => void;
+  ideas: ContentIdea[];
+  tasks: TodoTask[];
+  applications?: MarketplaceApplication[];
+  profileCompletion?: number;
+  onToggleTask: (id: string) => void;
+  onOpenTask: (task: TodoTask) => void;
+  onOpenCalendar: () => void;
+  onCreateTask?: () => void;
   additionalCampaigns?: Campaign[];
   privateCampaignIds?: string[];
+  creatorDirectory?: Influencer[];
+  loading?: boolean;
 };
 
 export function HomeDashboard({
@@ -119,29 +144,32 @@ export function HomeDashboard({
   onInfluencer,
   onCampaign,
   onChat,
+  onOpenApplication,
   proposals,
   onProposal,
+  onReminderPress,
+  onOpenCampaignVideo,
   onProfileEdit,
+  ideas,
+  tasks,
+  applications: scopedApplications,
+  profileCompletion = 0,
+  onToggleTask,
+  onOpenTask,
+  onOpenCalendar,
+  onCreateTask,
   additionalCampaigns = [],
   privateCampaignIds = [],
+  creatorDirectory,
+  loading = false,
 }: Props) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
-  const { influencers, campaigns: demoCampaigns, homePromos, isLoading } =
+  const { allInfluencers, applications: storedApplications, isLoading } =
     useDemoMarketplace();
-  const campaigns = [...additionalCampaigns, ...demoCampaigns];
-  const rolePromos = homePromos.filter(
-    (promo) => promo.audience === "Both" || promo.audience === role,
-  );
+  const brandCreators = creatorDirectory ?? allInfluencers;
+  const applications = scopedApplications ?? storedApplications;
   const { width } = useWindowDimensions();
-  const promoWidth = Math.min(
-    360,
-    Math.max(240, width - theme.spacing.lg * 2),
-  );
-  const creatorCardWidth = Math.min(
-    258,
-    Math.max(224, Math.round(width * 0.68)),
-  );
   const campaignCardWidth = Math.min(
     322,
     Math.max(248, Math.round(width * 0.8)),
@@ -150,13 +178,19 @@ export function HomeDashboard({
     300,
     Math.max(232, Math.round(width * 0.76)),
   );
-  const promoInset = Math.max(0, (width - promoWidth) / 2);
-  const creatorInset = Math.max(0, (width - creatorCardWidth) / 2);
-  const campaignInset = Math.max(0, (width - campaignCardWidth) / 2);
-  const compactCampaignInset = Math.max(0, (width - campaignCompactWidth) / 2);
-  const [promoIndex, setPromoIndex] = useState(0);
-  const openPromo = (action: "discover" | "campaigns") =>
-    action === "discover" ? onDiscover() : onCampaign();
+  if (loading) {
+    return (
+      <ScrollView
+        style={styles.screen}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.page}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+      >
+        <HomeLoadingSkeleton />
+      </ScrollView>
+    );
+  }
   if (role === "Influencer") {
     return (
       <CreatorHomeDashboard
@@ -164,10 +198,20 @@ export function HomeDashboard({
         onDiscover={onDiscover}
         onCampaign={onCampaign}
         onChat={onChat}
+        onOpenApplication={onOpenApplication}
         proposals={proposals}
-        promos={rolePromos}
         onProposal={onProposal}
+        onReminderPress={onReminderPress}
+        onOpenCampaignVideo={onOpenCampaignVideo}
         onProfileEdit={onProfileEdit}
+        ideas={ideas}
+        tasks={tasks}
+        applications={applications}
+        profileCompletion={profileCompletion}
+        onToggleTask={onToggleTask}
+        onOpenTask={onOpenTask}
+        onOpenCalendar={onOpenCalendar}
+        onCreateTask={onCreateTask}
         additionalCampaigns={additionalCampaigns}
         privateCampaignIds={privateCampaignIds}
       />
@@ -176,66 +220,13 @@ export function HomeDashboard({
 
   return (
     <ScrollView
+      style={styles.screen}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.page}
       onScroll={onScroll}
       scrollEventThrottle={16}
     >
-      <View style={styles.promoSection}>
-        <View style={styles.promoViewport}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            decelerationRate="fast"
-            disableIntervalMomentum
-            snapToOffsets={rolePromos.map(
-              (_, index) => index * (promoWidth + theme.spacing.sm),
-            )}
-            snapToAlignment="start"
-            contentContainerStyle={[
-              styles.promoCarousel,
-              { paddingHorizontal: promoInset },
-            ]}
-            onMomentumScrollEnd={(event) => {
-              setPromoIndex(
-                Math.min(
-                  rolePromos.length - 1,
-                  Math.max(
-                    0,
-                    Math.round(
-                      event.nativeEvent.contentOffset.x /
-                        (promoWidth + theme.spacing.sm),
-                    ),
-                  ),
-                ),
-              );
-            }}
-            scrollEventThrottle={16}
-          >
-            {rolePromos.map((promo) => (
-              <DynamicPromoSlide
-                key={promo.id}
-                promo={promo}
-                width={promoWidth}
-                onPress={() => openPromo(promo.action)}
-              />
-            ))}
-          </ScrollView>
-        </View>
-        <View
-          accessibilityRole="adjustable"
-          accessibilityValue={{
-            min: 1,
-            max: rolePromos.length,
-            now: promoIndex + 1,
-          }}
-          style={styles.dots}
-        >
-          {rolePromos.map((promo, index) => (
-            <PromoDot key={promo.id} active={index === promoIndex} />
-          ))}
-        </View>
-      </View>
+      <HomeHeroCard role="Brand" matchCount={brandCreators.length} secondaryCount={applications.filter((application) => application.status === "Pending").length} onPress={() => onDiscover()} />
 
       <View style={styles.contentSection}>
         <HomeSectionHeading
@@ -252,33 +243,8 @@ export function HomeDashboard({
           </View>
         ) : (
           <>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              decelerationRate="fast"
-              disableIntervalMomentum
-              snapToOffsets={influencers
-                .slice(0, 4)
-                .map(
-                  (_, index) => index * (creatorCardWidth + theme.spacing.sm),
-                )}
-              snapToAlignment="start"
-              contentContainerStyle={[
-                styles.creatorCarousel,
-                { paddingHorizontal: creatorInset },
-              ]}
-            >
-              {influencers.slice(0, 4).map((item) => (
-                <CreatorSpotlight
-                  key={item.id}
-                  item={item}
-                  width={creatorCardWidth}
-                  onPress={() => onInfluencer(item)}
-                />
-              ))}
-            </ScrollView>
             <View style={styles.creatorList}>
-              {influencers.slice(4).map((item) => (
+              {brandCreators.map((item) => (
                 <CreatorListItem
                   key={item.id}
                   item={item}
@@ -293,138 +259,184 @@ export function HomeDashboard({
       <View style={styles.contentSection}>
         <HomeSectionHeading
           icon="briefcase-outline"
-          title="Your campaigns"
+          title="Campaign overview"
           action="Manage"
-          onAction={onCampaign}
+          onAction={() => onCampaign()}
         />
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          decelerationRate="fast"
-          disableIntervalMomentum
-          snapToOffsets={campaigns
-            .slice(0, 3)
-            .map((_, index) => index * (campaignCardWidth + theme.spacing.sm))}
-          snapToAlignment="start"
-          contentContainerStyle={[
-            styles.campaignRail,
-            { paddingHorizontal: campaignInset },
-          ]}
-        >
-          {campaigns.slice(0, 3).map((item) => (
-            <CampaignQuickCard
-              key={item.id}
-              item={item}
-              width={campaignCardWidth}
-              onPress={() => onCampaign(item)}
-            />
-          ))}
-        </ScrollView>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          decelerationRate="fast"
-          disableIntervalMomentum
-          snapToOffsets={campaigns
-            .slice(3)
-            .map(
-              (_, index) => index * (campaignCompactWidth + theme.spacing.sm),
-            )}
-          snapToAlignment="start"
-          contentContainerStyle={[
-            styles.campaignCompactRail,
-            { paddingHorizontal: compactCampaignInset },
-          ]}
-        >
-          {campaigns.slice(3).map((item) => (
-            <CampaignQuickCard
-              key={item.id}
-              item={item}
-              width={campaignCompactWidth}
-              onPress={() => onCampaign(item)}
-            />
-          ))}
-        </ScrollView>
-      </View>
-
-      <View style={styles.contentSection}>
-        <HomeSectionHeading icon="compass-outline" title="Keep moving" />
-        <View style={styles.actionList}>
-          {homeActions.map((item) => (
-            <HomeAction
-              key={item.id}
-              item={item}
-              role={role}
-              onPress={item.id === "discover" ? onDiscover : onCampaign}
-            />
-          ))}
-        </View>
+        {additionalCampaigns.slice(0, 2).map((campaign, index) => (
+          <AppCard key={campaign.id} onPress={() => onCampaign(campaign)} style={[styles.briefPreviewCard, [styles.briefToneSky, styles.briefToneMint, styles.briefToneButter, styles.briefToneBlush][index % 4]]}>
+            <View style={styles.feedHeader}>
+              <View style={styles.feedIcon}><Text style={styles.feedIconText}>{campaign.brandInitials ?? campaign.brand.slice(0, 2).toUpperCase()}</Text></View>
+              <View style={styles.feedCopy}><Text style={styles.feedTitle}>{campaign.title}</Text><Text style={styles.feedMeta}>{campaign.category} · {campaign.city}</Text></View>
+              <Pill label={campaign.visibility === "private" ? "Private" : campaign.status} accent={campaign.visibility !== "private" && (campaign.status === "Published" || campaign.status === "Open")} />
+            </View>
+            <Text numberOfLines={2} style={styles.feedMeta}>{campaign.description}</Text>
+          </AppCard>
+        ))}
+        {!additionalCampaigns.length ? <Text style={styles.feedMeta}>Create a campaign to start tracking your brand workspace.</Text> : null}
       </View>
 
       <View style={styles.contentSection}>
         <HomeSectionHeading
           icon="grid-outline"
-          title="Browse top categories"
-          action="Explore"
+          title="Browse by niche"
+          action="See all"
           onAction={onDiscover}
         />
-        <View style={styles.categoryMasonry}>
-          <View style={styles.categoryColumn}>
-            {topCategories
-              .filter((_, index) => index % 2 === 0)
-              .map((item) => (
-                <CategoryTile
-                  key={item.label}
-                  item={item}
-                  onPress={onDiscover}
-                />
-              ))}
-          </View>
-          <View style={styles.categoryColumn}>
-            {topCategories
-              .filter((_, index) => index % 2 !== 0)
-              .map((item) => (
-                <CategoryTile
-                  key={item.label}
-                  item={item}
-                  onPress={onDiscover}
-                />
-              ))}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Explore more creator categories"
-              onPress={onDiscover}
-              style={({ pressed }) => [
-                styles.moreCategory,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.moreCategoryIcon}>
-                <AppIcon
-                  name="grid-outline"
-                  size={20}
-                  color={theme.colors.primary}
-                />
-              </View>
-              <Text numberOfLines={1} style={styles.moreCategoryTitle}>
-                More categories
-              </Text>
-              <Text numberOfLines={2} style={styles.moreCategoryDescription}>
-                Find the right creator for every brief.
-              </Text>
-              <View style={styles.moreCategoryFooter}>
-                <Text style={styles.moreCategoryLink}>Explore all</Text>
-                <AppIcon
-                  name="arrow-forward"
-                  size={17}
-                  color={theme.colors.primary}
-                />
-              </View>
-            </Pressable>
-          </View>
+        <View style={styles.categoryRail}>
+          {topCategories.slice(0, 7).map((item, index) => (
+            <CategoryTile
+              key={item.label}
+              item={item}
+              index={index}
+              onPress={() => onDiscover(item.label)}
+            />
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Explore more creator categories"
+            onPress={() => onDiscover()}
+            style={({ pressed }) => [
+              styles.moreCategory,
+              pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.moreCategoryIcon}>
+              <AppIcon
+                name="grid-outline"
+                size={20}
+                color={theme.colors.primary}
+              />
+            </View>
+            <Text numberOfLines={1} style={styles.moreCategoryTitle}>
+              More niches
+            </Text>
+            <Text numberOfLines={2} style={styles.moreCategoryDescription}>
+              See every creator category.
+            </Text>
+            <View style={styles.moreCategoryFooter}>
+              <Text style={styles.moreCategoryLink}>See all</Text>
+              <AppIcon
+                name="arrow-forward"
+                size={17}
+                color={theme.colors.primary}
+              />
+            </View>
+          </Pressable>
         </View>
       </View>
     </ScrollView>
+  );
+}
+
+function HomeLoadingSkeleton() {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  return (
+    <View accessibilityRole="progressbar" accessibilityLabel="Loading home" style={styles.homeSkeleton}>
+      <AppCard style={[styles.homeHero, styles.homeSkeletonHero]}>
+        <Skeleton width="34%" height={12} />
+        <Skeleton width="70%" height={28} />
+        <Skeleton width="92%" height={12} />
+        <Skeleton width="68%" height={12} />
+        <View style={styles.homeSkeletonStats}>
+          {[1, 2].map((item) => (
+            <View key={item} style={styles.homeSkeletonStat}>
+              <Skeleton width="42%" height={24} />
+              <Skeleton width="76%" height={10} />
+            </View>
+          ))}
+        </View>
+      </AppCard>
+      {[1, 2, 3].map((section) => (
+        <View key={section} style={styles.contentSection}>
+          <View style={styles.homeSkeletonHeading}>
+            <Skeleton width={36} height={36} />
+            <View style={styles.homeSkeletonHeadingCopy}>
+              <Skeleton width="46%" height={16} />
+              <Skeleton width="24%" height={10} />
+            </View>
+          </View>
+          <View style={styles.skeletons}>
+            <MarketplaceCardSkeleton />
+            <MarketplaceCardSkeleton />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function HomeHeroCard({ role, matchCount, secondaryCount, onPress }: { role: "Brand" | "Influencer"; matchCount: number; secondaryCount: number; onPress: () => void }) {
+  const { theme, text } = useTheme();
+  const styles = makeStyles(theme);
+  const isBrand = role === "Brand";
+  const headingFallback = isBrand ? "Find your next creator." : "Find briefs made for you.";
+  const heading = text(isBrand ? "home.brand.heading" : "home.creator.heading", headingFallback);
+  const description = text(isBrand ? "home.brand.description" : "home.creator.description", isBrand
+    ? "Browse a few strong matches and move the right brief forward."
+    : "See your best matches, then keep every application moving.");
+  const buttonLabel = text(isBrand ? "home.brand.buttonLabel" : "home.creator.buttonLabel", isBrand ? "Explore creators" : "Explore briefs");
+  const heroProgress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    let cancelled = false;
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((reduceMotion) => {
+        if (cancelled) return;
+        Animated.timing(heroProgress, {
+          toValue: 1,
+          duration: reduceMotion ? 0 : 420,
+          useNativeDriver: NATIVE_ANIMATIONS_ENABLED,
+        }).start();
+      })
+      .catch(() => {
+        if (!cancelled) Animated.timing(heroProgress, { toValue: 1, duration: 280, useNativeDriver: NATIVE_ANIMATIONS_ENABLED }).start();
+      });
+    return () => {
+      cancelled = true;
+      heroProgress.stopAnimation();
+    };
+  }, [heroProgress]);
+  return (
+    <AppCard style={[styles.homeHero, isBrand ? styles.homeHeroBrand : styles.homeHeroCreator]}>
+      <View pointerEvents="none" style={styles.heroDecoration}>
+        <View style={[styles.heroBlob, isBrand ? styles.heroBlobBrand : styles.heroBlobCreator]} />
+        <View style={[styles.heroBlobSecondary, isBrand ? styles.heroBlobBrandSecondary : styles.heroBlobCreatorSecondary]} />
+      </View>
+        <View style={styles.heroTopline}>
+          <View style={[styles.heroIcon, isBrand ? styles.heroIconBrand : styles.heroIconCreator]}>
+            <AppIcon
+              name={isBrand ? "people-outline" : "videocam-outline"}
+              size={20}
+              color={isBrand ? theme.colors.secondaryText : theme.colors.tertiaryText}
+            />
+          </View>
+          <View style={styles.heroToplineCopy}>
+            <Text style={styles.homeHeroEyebrow}>{isBrand ? "Brand workspace" : "Creator workspace"}</Text>
+            <Text style={styles.homeHeroToday}>Today</Text>
+          </View>
+          <Animated.Text style={[styles.heroScriptText, isBrand ? styles.heroScriptBrand : styles.heroScriptCreator, { opacity: heroProgress }]}>{isBrand ? "Build · Connect · Grow" : "Create · Grow · Earn"}</Animated.Text>
+        </View>
+        <Text style={styles.homeHeroTitle}>{heading === headingFallback ? <><Text>{isBrand ? "Find your next " : "Find briefs "}</Text><Text style={isBrand ? styles.homeHeroTitleAccentBrand : styles.homeHeroTitleAccentCreator}>{isBrand ? "creator." : "made for you."}</Text></> : heading}</Text>
+        <Text style={styles.homeHeroBody}>{description}</Text>
+        <View style={styles.homeHeroStats}>
+          <View style={[styles.homeHeroStat, styles.homeHeroStatMatch]}>
+            <Text style={styles.homeHeroValue}>{matchCount}</Text>
+            <Text style={styles.homeHeroLabel}>{isBrand ? "Creator matches" : "Matched briefs"}</Text>
+          </View>
+          <View style={[styles.homeHeroStat, styles.homeHeroStatSecondary]}>
+            <Text style={styles.homeHeroValue}>{secondaryCount}</Text>
+            <Text style={styles.homeHeroLabel}>{isBrand ? "To review" : "Open tasks"}</Text>
+          </View>
+        </View>
+        <AppButton
+          label={buttonLabel}
+          icon="arrow-forward"
+          onPress={onPress}
+          tone={isBrand ? "secondary" : "tertiary"}
+          style={styles.homeHeroButton}
+        />
+    </AppCard>
   );
 }
 
@@ -433,10 +445,20 @@ function CreatorHomeDashboard({
   onDiscover,
   onCampaign,
   onChat,
+  onOpenApplication,
   proposals,
-  promos,
   onProposal,
+  onReminderPress,
+  onOpenCampaignVideo,
   onProfileEdit,
+  ideas,
+  tasks,
+  applications,
+  profileCompletion,
+  onToggleTask,
+  onOpenTask,
+  onOpenCalendar,
+  onCreateTask,
   additionalCampaigns,
   privateCampaignIds,
 }: {
@@ -444,37 +466,54 @@ function CreatorHomeDashboard({
   onDiscover: () => void;
   onCampaign: (item?: Campaign) => void;
   onChat: (name: string, initials: string) => void;
+  onOpenApplication?: (application: MarketplaceApplication) => void;
   proposals: DemoProposal[];
-  promos: HomePromo[];
   onProposal: (proposal: DemoProposal) => void;
+  onReminderPress: (proposal: DemoProposal) => void;
+  onOpenCampaignVideo: (url: string) => void;
   onProfileEdit: () => void;
+  ideas: ContentIdea[];
+  tasks: TodoTask[];
+  applications: MarketplaceApplication[];
+  profileCompletion: number;
+  onToggleTask: (id: string) => void;
+  onOpenTask: (task: TodoTask) => void;
+  onOpenCalendar: () => void;
+  onCreateTask?: () => void;
   additionalCampaigns: Campaign[];
   privateCampaignIds: string[];
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
-  const { campaigns: demoCampaigns, isLoading } = useDemoMarketplace();
-  const campaigns = [...additionalCampaigns, ...demoCampaigns];
-  const openCampaigns = campaigns.filter(
-    (campaign) =>
-      campaign.status === "Open" && !privateCampaignIds.includes(campaign.id),
+  const { briefs, isLoading } = useDemoMarketplace();
+  const { width: screenWidth } = useWindowDimensions();
+  const applicationCardWidth = Math.min(
+    320,
+    Math.max(260, screenWidth - theme.spacing.lg * 3),
   );
   return (
     <ScrollView
+      style={styles.screen}
       showsVerticalScrollIndicator={false}
       contentContainerStyle={styles.page}
       onScroll={onScroll}
       scrollEventThrottle={16}
     >
-      <RolePromoCarousel
-        promos={promos}
-        onDiscover={onDiscover}
-        onCampaign={onCampaign}
+      <HomeHeroCard role="Influencer" matchCount={briefs.filter((brief) => brief.active).length} secondaryCount={tasks.filter((task) => !task.completed).length} onPress={() => onDiscover()} />
+      <TodoTaskPanel
+        tasks={tasks}
+        onToggleTask={onToggleTask}
+        onOpenTask={onOpenTask}
+        onOpenCalendar={onOpenCalendar}
+        onCreateTask={onCreateTask}
       />
+      <HomeTaskOverview tasks={tasks} ideas={ideas} proposals={proposals} />
+      <WeeklyPlanner tasks={tasks} onOpenTask={onOpenTask} />
+      <ConsistencyChart tasks={tasks} onPress={onOpenCalendar} />
       <View style={styles.contentSection}>
         <HomeSectionHeading
           icon="briefcase-outline"
-          title="Recommended briefs"
+          title="Matched briefs"
           action="View all"
           onAction={onDiscover}
         />
@@ -485,38 +524,53 @@ function CreatorHomeDashboard({
             ))}
           </View>
         ) : (
-          <RecommendedBriefRail
-            campaigns={openCampaigns.slice(0, 4)}
-            onPress={onCampaign}
+          <PublicBriefRail
+            briefs={briefs.slice(0, 4)}
+            onOpenBrief={(brief) => {
+              const campaign = additionalCampaigns.find((item) => item.id === brief.campaignId) ?? brandBriefToCampaign(brief);
+              onCampaign(campaign);
+            }}
           />
         )}
       </View>
       <View style={styles.contentSection}>
         <HomeSectionHeading
           icon="paper-plane-outline"
-          title="Your proposal activity"
+          title="Application status"
         />
-        <View style={styles.proposalList}>
-          {proposals.slice(0, 2).map((proposal) => (
-            <ProposalCard
-              key={proposal.id}
-              proposal={proposal}
-              onViewDetails={() => onProposal(proposal)}
-              onChat={
-                proposal.status === "Accepted"
-                  ? () =>
-                      onChat(
-                        proposal.participantName,
-                        proposal.participantInitials,
-                      )
-                  : undefined
-              }
-            />
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          decelerationRate="fast"
+          disableIntervalMomentum
+          snapToInterval={applicationCardWidth + theme.spacing.sm}
+          snapToAlignment="start"
+          contentContainerStyle={styles.applicationStatusRail}
+        >
+          {applications.slice(0, 2).map((application) => (
+            <AppCard
+              key={application.id}
+              style={[
+                styles.applicationStatusCard,
+                { width: applicationCardWidth },
+              ]}
+            >
+              <View style={[styles.feedHeader, styles.applicationStatusHeader]}>
+                <View style={styles.feedIcon}><AppIcon name="paper-plane-outline" size={18} color={theme.colors.primary} /></View>
+                <View style={styles.feedCopy}>
+                  <Text style={styles.feedTitle}>{application.briefTitle}</Text>
+                  <Text style={styles.feedMeta}>{application.brandName} · {application.status}</Text>
+                </View>
+                <Pill label={application.status} accent={application.status === "Accepted"} />
+              </View>
+              <Text style={styles.feedMeta}>{application.message || "Application submitted for review."}</Text>
+              {application.status === "Accepted" ? <AppButton label="Open chat" icon="chatbubble-ellipses-outline" variant="secondary" onPress={() => onOpenApplication ? onOpenApplication(application) : onChat(application.brandName, application.brandInitials)} /> : <Text style={styles.feedMeta}>Chat opens after the brand accepts.</Text>}
+            </AppCard>
           ))}
-        </View>
+        </ScrollView>
       </View>
       <View style={styles.contentSection}>
-        <HomeSectionHeading icon="sparkles-outline" title="Creator readiness" />
+        <HomeSectionHeading icon="checkmark-done-outline" title="Creator readiness" />
         <AppCard onPress={onProfileEdit} style={styles.readinessCard}>
           <View style={styles.readinessIcon}>
             <AppIcon
@@ -526,10 +580,11 @@ function CreatorHomeDashboard({
             />
           </View>
           <View style={styles.homeActionCopy}>
-            <Text style={styles.homeActionTitle}>Profile is 75% complete</Text>
+            <Text style={styles.homeActionTitle}>Profile is {profileCompletion}% complete</Text>
             <Text style={styles.homeActionDescription}>
-              Add your latest portfolio media, rates and preferred cities to
-              improve matching.
+              {profileCompletion >= 80
+                ? "Your profile is ready for more relevant matches."
+                : "Add your latest portfolio media, rates and preferred cities to improve matching."}
             </Text>
           </View>
           <AppIcon
@@ -559,7 +614,6 @@ function RolePromoCarousel({
     360,
     Math.max(240, width - theme.spacing.lg * 2),
   );
-  const inset = Math.max(0, (width - cardWidth) / 2);
   const [activeIndex, setActiveIndex] = useState(0);
   if (!promos.length) return null;
   return (
@@ -575,7 +629,7 @@ function RolePromoCarousel({
         snapToAlignment="start"
         contentContainerStyle={[
           styles.promoCarousel,
-          { paddingHorizontal: inset },
+          { paddingHorizontal: theme.spacing.lg },
         ]}
         onMomentumScrollEnd={(event) =>
           setActiveIndex(
@@ -612,18 +666,47 @@ function RolePromoCarousel({
   );
 }
 
+function PublicBriefRail({
+  briefs,
+  onOpenBrief,
+}: {
+  briefs: BrandBrief[];
+  onOpenBrief: (brief: BrandBrief) => void;
+}) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  return (
+    <View style={styles.briefPreviewList}>
+      {briefs.map((brief, index) => (
+        <AppCard key={brief.id} onPress={() => onOpenBrief(brief)} style={[styles.briefPreviewCard, [styles.briefToneSky, styles.briefToneMint, styles.briefToneButter, styles.briefToneBlush][index % 4]]}>
+          <View style={styles.feedHeader}>
+            <View style={styles.feedIcon}><Text style={styles.feedIconText}>{brief.brandInitials}</Text></View>
+            <View style={styles.feedCopy}>
+              <Text style={styles.feedTitle}>{brief.title}</Text>
+              <Text style={styles.feedMeta}>{brief.brandName} · {brief.city}</Text>
+            </View>
+            {brief.matchScore !== undefined ? <Pill label={`${brief.matchScore}%`} accent /> : null}
+          </View>
+          <Text numberOfLines={2} style={styles.feedMeta}>{brief.description}</Text>
+        </AppCard>
+      ))}
+    </View>
+  );
+}
+
 function RecommendedBriefRail({
   campaigns,
   onPress,
+  onOpenVideo,
 }: {
   campaigns: Campaign[];
   onPress: (item?: Campaign) => void;
+  onOpenVideo: (url: string) => void;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const { width: screenWidth } = useWindowDimensions();
   const width = Math.min(322, Math.max(248, screenWidth - theme.spacing.lg * 2));
-  const inset = Math.max(0, (screenWidth - width) / 2);
   const [activeIndex, setActiveIndex] = useState(0);
   return (
     <View>
@@ -638,7 +721,7 @@ function RecommendedBriefRail({
         snapToAlignment="start"
         contentContainerStyle={[
           styles.campaignRail,
-          { paddingHorizontal: inset },
+          { paddingHorizontal: theme.spacing.lg },
         ]}
         onMomentumScrollEnd={(event) =>
           setActiveIndex(
@@ -661,6 +744,7 @@ function RecommendedBriefRail({
             item={campaign}
             width={width}
             onPress={() => onPress(campaign)}
+            onOpenVideo={onOpenVideo}
           />
         ))}
       </ScrollView>
@@ -678,23 +762,28 @@ export function CreatorSpotlight({
   width,
   saved,
   onSave,
+  compared,
+  onToggleCompare,
   onPress,
 }: {
   item: Influencer;
   width: number;
   saved?: boolean;
   onSave?: () => void;
+  compared?: boolean;
+  onToggleCompare?: () => void;
   onPress: () => void;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
+  const creatorTone = [styles.creatorToneSky, styles.creatorToneMint, styles.creatorToneBlush, styles.creatorToneButter][item.id.split("").reduce((sum, character) => sum + character.charCodeAt(0), 0) % 4];
   return (
     <View style={[styles.railItem, { width }]}> 
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`View ${item.name}`}
         onPress={onPress}
-        style={({ pressed }) => [styles.creatorCard, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.creatorCard, creatorTone, pressed && styles.pressed]}
       >
         <View style={styles.creatorPhotoFrame}>
           <Avatar initials={item.initials} uri={item.avatarUrl} size="large" />
@@ -706,20 +795,25 @@ export function CreatorSpotlight({
                   ? `Remove ${item.name} from saved creators`
                   : `Save ${item.name}`
               }
-              onPress={onSave}
+              onPress={(event) => {
+                event.stopPropagation();
+                onSave();
+              }}
               style={styles.creatorSave}
+              hitSlop={6}
             >
               <AppIcon
                 name={saved ? "bookmark" : "bookmark-outline"}
                 size={18}
                 color={theme.colors.primary}
               />
+              <Text style={styles.creatorSaveText}>{saved ? "Saved" : "Save"}</Text>
             </Pressable>
           ) : null}
         </View>
         <View style={styles.creatorCopy}>
           <Text
-            numberOfLines={1}
+            numberOfLines={2}
             ellipsizeMode="tail"
             style={styles.creatorName}
           >
@@ -743,7 +837,7 @@ export function CreatorSpotlight({
           </View>
           <View style={styles.creatorNicheRow}>
             <AppIcon
-              name="sparkles-outline"
+              name="pricetag-outline"
               size={13}
               color={theme.colors.textSecondary}
             />
@@ -772,30 +866,79 @@ export function CreatorSpotlight({
           </View>
           <View style={styles.creatorStat}>
             <View style={styles.creatorRating}>
-              <AppIcon name="star" size={14} color={theme.colors.primary} />
+              <AppIcon name="star" size={14} color={theme.colors.tertiaryText} />
               <Text numberOfLines={1} style={styles.ratingText}>
                 {item.rating}
               </Text>
             </View>
             <Text style={styles.creatorMetricLabel}>Rating</Text>
           </View>
+          {item.engagementRate ? (
+            <View style={styles.creatorStat}>
+              <Text numberOfLines={1} style={styles.creatorMetric}>
+                {item.engagementRate}
+              </Text>
+              <Text style={styles.creatorMetricLabel}>Engagement</Text>
+            </View>
+          ) : null}
+          <View style={styles.creatorStat}>
+            <Text numberOfLines={1} style={styles.creatorMetric}>
+              {item.reviews}
+            </Text>
+            <Text style={styles.creatorMetricLabel}>Reviews</Text>
+          </View>
+        </View>
+        <View style={styles.creatorPlatformRow}>
+          {item.platforms.slice(0, 3).map((platform) => (
+            <Pill key={platform} label={platform} />
+          ))}
         </View>
         <View style={styles.creatorFooter}>
           <View style={styles.creatorMetricRow}>
             <AppIcon
               name="cash-outline"
               size={16}
-              color={theme.colors.primary}
+              color={theme.colors.secondaryText}
             />
             <Text numberOfLines={1} ellipsizeMode="tail" style={styles.price}>
               {item.price}
             </Text>
           </View>
-          <AppIcon
-            name="arrow-forward"
-            size={18}
-            color={theme.colors.primary}
-          />
+        </View>
+        <View style={styles.creatorActionRow}>
+          {compared !== undefined && onToggleCompare ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={compared ? `Remove ${item.name} from comparison` : `Add ${item.name} to comparison`}
+              accessibilityState={{ selected: compared }}
+              onPress={(event) => {
+                event.stopPropagation();
+                onToggleCompare();
+              }}
+              hitSlop={4}
+              style={({ pressed }) => [
+                styles.creatorCompareAction,
+                compared && styles.creatorCompareActionActive,
+                pressed && styles.pressed,
+              ]}
+            >
+              <AppIcon name={compared ? "checkmark" : "add"} size={17} color={theme.colors.primary} />
+              <Text style={styles.creatorCompareActionText}>{compared ? "Compared" : "Compare"}</Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${item.name} profile`}
+            onPress={(event) => {
+              event.stopPropagation();
+              onPress();
+            }}
+            hitSlop={4}
+            style={({ pressed }) => [styles.creatorOpenProfileAction, pressed && styles.pressed]}
+          >
+            <Text style={styles.creatorOpenProfileActionText}>Open profile</Text>
+            <AppIcon name="arrow-forward" size={17} color={theme.colors.primaryText} />
+          </Pressable>
         </View>
       </Pressable>
     </View>
@@ -814,7 +957,7 @@ function HomeSectionHeading({
     | "compass-outline"
     | "grid-outline"
     | "paper-plane-outline"
-    | "sparkles-outline";
+    | "checkmark-done-outline";
   title: string;
   action?: string;
   onAction?: () => void;
@@ -842,41 +985,29 @@ function CreatorListItem({
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
+  const creatorTone = [styles.creatorToneSky, styles.creatorToneMint, styles.creatorToneBlush, styles.creatorToneButter][item.id.split("").reduce((sum, character) => sum + character.charCodeAt(0), 0) % 4];
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`View ${item.name}`}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.creatorListCard,
-        pressed && styles.pressed,
-      ]}
-    >
-      <Avatar initials={item.initials} uri={item.avatarUrl} size="small" />
-      <View style={styles.creatorListCopy}>
-        <Text numberOfLines={1} style={styles.creatorName}>
-          {item.name}
-        </Text>
-        <Text numberOfLines={1} style={styles.creatorNiche}>
-          {item.niche} · {item.city}
-        </Text>
-      </View>
-      <View style={styles.creatorListMetric}>
-        <View style={styles.creatorMetricRow}>
-          <AppIcon
-            name="people-outline"
-            size={14}
-            color={theme.colors.textSecondary}
-          />
-          <Text style={styles.creatorMetric}>{item.followers}</Text>
+    <View style={[styles.creatorListCard, creatorTone]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`View ${item.name}`}
+        onPress={onPress}
+        style={({ pressed }) => [styles.creatorListPress, pressed && styles.pressed]}
+      >
+        <Avatar initials={item.initials} uri={item.avatarUrl} size="small" />
+        <View style={styles.creatorListCopy}>
+          <Text numberOfLines={1} style={styles.creatorName}>{item.name}</Text>
+          <Text numberOfLines={1} style={styles.creatorNiche}>{item.niche} · {item.city}</Text>
         </View>
-      </View>
-      <AppIcon
-        name="chevron-forward"
-        size={20}
-        color={theme.colors.textSecondary}
-      />
-    </Pressable>
+        <View style={styles.creatorListMetric}>
+          <View style={styles.creatorMetricRow}>
+            <AppIcon name="people-outline" size={14} color={theme.colors.textSecondary} />
+            <Text style={styles.creatorMetric}>{item.followers}</Text>
+          </View>
+        </View>
+        <AppIcon name="chevron-forward" size={20} color={theme.colors.textSecondary} />
+      </Pressable>
+    </View>
   );
 }
 
@@ -884,10 +1015,12 @@ function CampaignQuickCard({
   item,
   width,
   onPress,
+  onOpenVideo,
 }: {
   item: Campaign;
   width: number;
   onPress: () => void;
+  onOpenVideo?: (url: string) => void;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
@@ -898,9 +1031,12 @@ function CampaignQuickCard({
           <View style={styles.brandMark}>
             <Text style={styles.brandMarkText}>{item.brand.slice(0, 1)}</Text>
           </View>
-          <Text numberOfLines={1} style={styles.campaignBrand}>
-            {item.brand}
-          </Text>
+          <View style={styles.campaignBrandCopy}>
+            <Text numberOfLines={1} style={styles.campaignBrand}>
+              {item.brand}
+            </Text>
+            {item.promoted ? <Pill label="Promoted" accent /> : null}
+          </View>
         </View>
         <View style={styles.campaignTitleRow}>
           <AppIcon
@@ -918,6 +1054,23 @@ function CampaignQuickCard({
         <Text numberOfLines={2} style={styles.campaignDescription}>
           {item.description}
         </Text>
+        {item.collaborationVideoUrl && onOpenVideo ? (
+          <Pressable
+            accessibilityRole="link"
+            accessibilityLabel={item.collaborationVideoLabel ?? "Watch collaboration video"}
+            onPress={(event) => {
+              event.stopPropagation();
+              onOpenVideo(item.collaborationVideoUrl!);
+            }}
+            style={({ pressed }) => [styles.campaignVideoLink, pressed && styles.pressed]}
+          >
+            <AppIcon name="videocam-outline" size={16} color={theme.colors.primary} />
+            <Text numberOfLines={1} style={styles.campaignVideoLabel}>
+              {item.collaborationVideoLabel ?? "Watch collaboration video"}
+            </Text>
+            <AppIcon name="open-outline" size={15} color={theme.colors.primary} />
+          </Pressable>
+        ) : null}
         <View style={styles.campaignRailFooter}>
           <Pill label={item.status} accent={item.status === "Accepted"} />
           <Text style={styles.campaignBudget}>{item.budget}</Text>
@@ -929,9 +1082,11 @@ function CampaignQuickCard({
 
 function CategoryTile({
   item,
+  index,
   onPress,
 }: {
   item: (typeof topCategories)[number];
+  index: number;
   onPress: () => void;
 }) {
   const { theme } = useTheme();
@@ -943,7 +1098,13 @@ function CategoryTile({
       onPress={onPress}
       style={({ pressed }) => [
         styles.categoryTile,
-        item.size === "tall" && styles.categoryTileTall,
+        index % 3 === 0 && styles.categoryTileTall,
+        index % 3 === 1 && styles.categoryTileShort,
+        item.tone === "butter" && styles.categoryTileButter,
+        item.tone === "blush" && styles.categoryTileBlush,
+        item.tone === "mint" && styles.categoryTileMint,
+        item.tone === "sky" && styles.categoryTileSky,
+        item.tone === "lilac" && styles.categoryTileLilac,
         pressed && styles.pressed,
       ]}
     >
@@ -967,44 +1128,6 @@ function CategoryTile({
           {item.note}
         </Text>
       </View>
-    </Pressable>
-  );
-}
-
-function HomeAction({
-  item,
-  role,
-  onPress,
-}: {
-  item: (typeof homeActions)[number];
-  role: Props["role"];
-  onPress: () => void;
-}) {
-  const { theme } = useTheme();
-  const styles = makeStyles(theme);
-  const label =
-    item.id === "discover" && role === "Influencer"
-      ? "Explore briefs"
-      : item.title;
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={({ pressed }) => [styles.homeAction, pressed && styles.pressed]}
-    >
-      <View style={styles.homeActionIcon}>
-        <AppIcon name={item.icon} size={22} color={theme.colors.primary} />
-      </View>
-      <View style={styles.homeActionCopy}>
-        <Text numberOfLines={1} style={styles.homeActionTitle}>
-          {label}
-        </Text>
-        <Text numberOfLines={2} style={styles.homeActionDescription}>
-          {item.description}
-        </Text>
-      </View>
-      <AppIcon name="arrow-forward" size={19} color={theme.colors.primary} />
     </Pressable>
   );
 }
@@ -1044,7 +1167,7 @@ function DynamicPromoSlide({
       : theme.colors.textSecondary;
   const height = Math.max(178, Math.round(width * 0.59));
   const visual = promo.media ? <PromoImage uri={promo.media.uri} /> : null;
-  if ((promo.layout === "image" || promo.layout === "imageOnly") && visual)
+  if (visual)
     return (
       <View>
         <View style={[styles.mediaOnlyCard, { width, height }]}>
@@ -1165,11 +1288,11 @@ function PromoCta({
         onPress={onPress}
         style={[styles.iconCta, position]}
       >
-        <AppIcon
-          name="arrow-forward"
-          size={19}
-          color={theme.colors.primaryText}
-        />
+            <AppIcon
+              name="arrow-forward"
+              size={16}
+              color={theme.colors.primaryText}
+            />
       </Pressable>
     );
   if (cta.kind === "link")
@@ -1186,20 +1309,56 @@ function PromoCta({
     );
   return (
     <View style={position}>
-      <AppButton label={cta.label ?? "Open"} compact onPress={onPress} />
+      <AppButton label={cta.label ?? "Open"} onPress={onPress} />
     </View>
   );
 }
 
 const makeStyles = (theme: AppTheme) =>
-  StyleSheet.create({
+  createThemeStyles(theme, {
+    screen: { flex: 1, backgroundColor: theme.colors.transparent },
     page: {
+      backgroundColor: theme.colors.transparent,
+      width: "100%",
+      maxWidth: 640,
+      alignSelf: "center",
       paddingTop: theme.spacing.md,
       paddingBottom: theme.spacing.xxl + theme.spacing.xl,
-      gap: theme.spacing.xl,
+      gap: theme.spacing.lg,
     },
+    homeHero: { position: "relative", overflow: "hidden", marginHorizontal: theme.spacing.lg, borderRadius: theme.radius.lg, gap: theme.spacing.sm, borderWidth: 1, borderColor: theme.colors.cardBorder, paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.lg },
+    homeHeroBrand: { backgroundColor: theme.colors.surfaceHero },
+    homeHeroCreator: { backgroundColor: theme.colors.surfaceHero },
+    heroTopline: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm },
+    heroIcon: { width: 44, height: 44, borderRadius: theme.radius.pill, alignItems: "center", justifyContent: "center" },
+    heroIconBrand: { backgroundColor: theme.colors.surfaceBlush },
+    heroIconCreator: { backgroundColor: theme.colors.surfaceSky },
+    heroToplineCopy: { flex: 1, minWidth: 0, gap: 1 },
+    homeHeroEyebrow: { color: theme.colors.textPrimary, fontSize: theme.type.body, fontWeight: "800", fontFamily: theme.type.bodyFont },
+    homeHeroToday: { color: theme.colors.textSecondary, fontSize: theme.type.caption, fontFamily: theme.type.bodyFont },
+    homeHeroTitle: { maxWidth: "78%", color: theme.colors.textPrimary, fontSize: theme.type.display, lineHeight: theme.type.lineHeight.display, fontWeight: "900", fontFamily: theme.type.displayFont },
+    homeHeroTitleAccentBrand: { color: theme.colors.secondaryText },
+    homeHeroTitleAccentCreator: { color: theme.colors.tertiaryText },
+    homeHeroBody: { color: theme.colors.textSecondary, fontSize: theme.type.body, lineHeight: theme.type.lineHeight.body, fontFamily: theme.type.bodyFont },
+    homeHeroStats: { flexDirection: "row", gap: theme.spacing.sm, marginTop: theme.spacing.xs },
+    homeHeroStat: { flex: 1, gap: theme.spacing.xs, padding: theme.spacing.sm, borderRadius: theme.radius.control, backgroundColor: theme.colors.surfaceRaised },
+    homeHeroStatMatch: { backgroundColor: theme.colors.surfaceSky },
+    homeHeroStatSecondary: { backgroundColor: theme.colors.surfaceMint },
+    homeHeroValue: { color: theme.colors.textPrimary, fontSize: theme.type.title, fontWeight: "900", fontFamily: theme.type.displayFont },
+    homeHeroLabel: { color: theme.colors.textSecondary, fontSize: theme.type.caption, fontFamily: theme.type.bodyFont },
+    homeHeroButton: { marginTop: theme.spacing.xs },
+    heroDecoration: { ...StyleSheet.absoluteFill },
+    heroBlob: { position: "absolute", top: -54, right: -42, width: 176, height: 140, borderRadius: theme.radius.pill, opacity: 0.62 },
+    heroBlobBrand: { backgroundColor: theme.colors.surfaceSky },
+    heroBlobCreator: { backgroundColor: theme.colors.accent },
+    heroBlobSecondary: { position: "absolute", right: -18, bottom: -62, width: 142, height: 112, borderRadius: theme.radius.pill, opacity: 0.6 },
+    heroBlobBrandSecondary: { backgroundColor: theme.colors.surfaceBlush },
+    heroBlobCreatorSecondary: { backgroundColor: theme.colors.surfaceBlush },
+    heroScriptText: { maxWidth: 112, marginLeft: "auto", textAlign: "right", fontSize: 10, lineHeight: 14, fontStyle: "italic", fontFamily: theme.type.displayFont, opacity: 0.72 },
+    heroScriptBrand: { color: theme.colors.secondaryText },
+    heroScriptCreator: { color: theme.colors.tertiaryText },
     promoSection: { gap: theme.spacing.xs },
-    promoViewport: { backgroundColor: theme.colors.background },
+    promoViewport: { backgroundColor: theme.colors.transparent },
     promoCarousel: {
       paddingLeft: theme.spacing.lg,
       paddingVertical: theme.spacing.sm,
@@ -1218,7 +1377,7 @@ const makeStyles = (theme: AppTheme) =>
     mediaOnlyCard: {
       overflow: "hidden",
       borderRadius: theme.radius.lg,
-      backgroundColor: theme.colors.surfaceMuted,
+      backgroundColor: theme.colors.surfaceSky,
     },
     mediaCta: { position: "absolute", bottom: theme.spacing.md },
     mediaCtaLeft: { left: theme.spacing.md },
@@ -1226,30 +1385,33 @@ const makeStyles = (theme: AppTheme) =>
     ctaLeft: { alignSelf: "flex-start" },
     ctaRight: { alignSelf: "flex-end" },
     iconCta: {
-      width: 40,
-      height: 40,
+      ...theme.shadows.floating,
+      width: 56,
+      height: 56,
       borderRadius: theme.radius.pill,
       alignItems: "center",
       justifyContent: "center",
       backgroundColor: theme.colors.primary,
     },
     linkCta: {
-      minHeight: 34,
+      minHeight: 36,
       flexDirection: "row",
       alignItems: "center",
-      gap: theme.spacing.xs,
+      gap: theme.spacing.sm,
     },
     linkCtaText: {
       color: theme.colors.primary,
-      fontSize: theme.type.caption,
-      fontWeight: "700",
+      fontSize: theme.type.body,
+      lineHeight: theme.type.lineHeight.body,
+      fontWeight: "500",
+      fontFamily: theme.type.bodyFont,
     },
     promoMedia: { ...StyleSheet.absoluteFill },
     promoImageFallback: {
       ...StyleSheet.absoluteFill,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: theme.colors.surfaceMuted,
+      backgroundColor: theme.colors.surfaceLilac,
     },
     promoScrim: {
       ...StyleSheet.absoluteFill,
@@ -1279,6 +1441,7 @@ const makeStyles = (theme: AppTheme) =>
       fontSize: theme.type.title,
       lineHeight: 26,
       fontWeight: "700",
+      fontFamily: theme.type.displayFont,
       letterSpacing: -0.1,
       maxWidth: "88%",
     },
@@ -1347,20 +1510,32 @@ const makeStyles = (theme: AppTheme) =>
     },
     dotActive: { width: 18, backgroundColor: theme.colors.primary },
     contentSection: { gap: theme.spacing.sm },
-    proposalList: {
-      marginHorizontal: theme.spacing.lg,
+    homeSkeleton: { gap: theme.spacing.lg },
+    homeSkeletonHero: { gap: theme.spacing.sm, backgroundColor: theme.colors.surfaceHero },
+    homeSkeletonStats: { flexDirection: "row", gap: theme.spacing.sm, marginTop: theme.spacing.xs },
+    homeSkeletonStat: { flex: 1, gap: theme.spacing.xs, padding: theme.spacing.sm, borderRadius: theme.radius.control, backgroundColor: theme.colors.surfaceRaised },
+    homeSkeletonHeading: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, paddingHorizontal: theme.spacing.lg },
+    homeSkeletonHeadingCopy: { flex: 1, gap: theme.spacing.xs },
+    applicationStatusRail: {
+      paddingHorizontal: theme.spacing.lg,
+      gap: theme.spacing.sm,
     },
+    applicationStatusCard: {
+      gap: theme.spacing.md,
+      backgroundColor: theme.colors.surfaceSky,
+    },
+    applicationStatusHeader: { alignItems: "flex-start" },
     readinessCard: {
       flexDirection: "row",
       alignItems: "center",
       gap: theme.spacing.sm,
       marginHorizontal: theme.spacing.lg,
-      backgroundColor: theme.colors.surfaceMuted,
+      backgroundColor: theme.colors.surfaceLilac,
     },
     readinessIcon: {
       width: 42,
       height: 42,
-      borderRadius: theme.radius.md,
+      borderRadius: theme.radius.control,
       alignItems: "center",
       justifyContent: "center",
       backgroundColor: theme.colors.surface,
@@ -1377,7 +1552,7 @@ const makeStyles = (theme: AppTheme) =>
       borderRadius: theme.radius.md,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: theme.colors.surfaceMuted,
+      backgroundColor: theme.colors.surfaceLilac,
     },
     sectionHeadingCopy: { flex: 1, minWidth: 0 },
     skeletons: { paddingHorizontal: theme.spacing.lg, gap: theme.spacing.sm },
@@ -1387,14 +1562,17 @@ const makeStyles = (theme: AppTheme) =>
     },
     railItem: { paddingVertical: theme.spacing.xs },
     creatorCard: {
-      minHeight: 244,
+      minHeight: 0,
       padding: theme.spacing.md,
       borderRadius: theme.radius.md,
       borderWidth: 1,
-      borderColor: theme.colors.border,
-      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.cardBorder,
       gap: theme.spacing.sm,
     },
+    creatorToneSky: { backgroundColor: theme.colors.surfaceSky },
+    creatorToneMint: { backgroundColor: theme.colors.surfaceMint },
+    creatorToneBlush: { backgroundColor: theme.colors.surfaceBlush },
+    creatorToneButter: { backgroundColor: theme.colors.surfaceButter },
     creatorPhotoFrame: {
       width: "100%",
       height: 76,
@@ -1407,12 +1585,18 @@ const makeStyles = (theme: AppTheme) =>
       position: "absolute",
       top: 0,
       right: 0,
-      width: 34,
-      height: 34,
-      borderRadius: theme.radius.pill,
+      minHeight: 36,
+      flexDirection: "row",
       alignItems: "center",
-      justifyContent: "center",
+      gap: 4,
+      paddingHorizontal: theme.spacing.sm,
+      borderRadius: theme.radius.pill,
       backgroundColor: theme.colors.surfaceMuted,
+    },
+    creatorSaveText: {
+      color: theme.colors.primary,
+      fontSize: theme.type.caption,
+      fontWeight: "800",
     },
     creatorLocation: {
       maxWidth: "100%",
@@ -1448,18 +1632,20 @@ const makeStyles = (theme: AppTheme) =>
     },
     creatorDetails: {
       flexDirection: "row",
+      flexWrap: "wrap",
       justifyContent: "space-around",
       alignItems: "center",
-      paddingVertical: theme.spacing.sm,
+      paddingVertical: theme.spacing.xs,
       borderTopWidth: 1,
       borderBottomWidth: 1,
       borderColor: theme.colors.border,
     },
     creatorStat: {
-      flex: 1,
+      width: "50%",
       minWidth: 0,
       alignItems: "center",
-      gap: 2,
+      gap: 1,
+      paddingVertical: theme.spacing.xs,
     },
     creatorMetricLabel: {
       color: theme.colors.textSecondary,
@@ -1479,8 +1665,53 @@ const makeStyles = (theme: AppTheme) =>
     },
     creatorFooter: {
       flexDirection: "row",
-      justifyContent: "space-between",
       alignItems: "center",
+      paddingTop: theme.spacing.sm,
+      borderTopWidth: 1,
+      borderColor: theme.colors.border,
+    },
+    creatorPlatformRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: theme.spacing.xs,
+    },
+    creatorActionRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.sm,
+    },
+    creatorCompareAction: {
+      flex: 1,
+      minHeight: 40,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: theme.spacing.xs,
+      borderRadius: theme.radius.control,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      backgroundColor: theme.colors.surfaceMuted,
+    },
+    creatorCompareActionActive: { backgroundColor: theme.colors.accent },
+    creatorCompareActionText: {
+      color: theme.colors.primary,
+      fontSize: theme.type.caption,
+      fontWeight: "800",
+    },
+    creatorOpenProfileAction: {
+      flex: 1,
+      minHeight: 40,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: theme.spacing.xs,
+      borderRadius: theme.radius.control,
+      backgroundColor: theme.colors.primary,
+    },
+    creatorOpenProfileActionText: {
+      color: theme.colors.primaryText,
+      fontSize: theme.type.caption,
+      fontWeight: "800",
     },
     price: {
       flexShrink: 1,
@@ -1497,23 +1728,30 @@ const makeStyles = (theme: AppTheme) =>
       gap: theme.spacing.sm,
       padding: theme.spacing.sm,
       paddingRight: theme.spacing.md,
-      borderRadius: theme.radius.md,
+      borderRadius: theme.radius.control,
       borderWidth: 1,
-      borderColor: theme.colors.border,
-      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.cardBorder,
     },
+    creatorListPress: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", gap: theme.spacing.sm },
     creatorListCopy: { flex: 1, gap: 2 },
     creatorListMetric: { alignItems: "flex-end", gap: 1 },
     campaignRail: { paddingVertical: theme.spacing.xs, gap: theme.spacing.sm },
     campaignRailCard: {
-      minHeight: 158,
+      height: 248,
+      justifyContent: "space-between",
       borderRadius: theme.radius.md,
       gap: theme.spacing.sm,
+      backgroundColor: theme.colors.surfaceSky,
     },
     campaignTop: {
       flexDirection: "row",
       alignItems: "center",
       gap: theme.spacing.sm,
+    },
+    campaignBrandCopy: {
+      flex: 1,
+      minWidth: 0,
+      gap: theme.spacing.xs,
     },
     brandMark: {
       width: 40,
@@ -1549,6 +1787,19 @@ const makeStyles = (theme: AppTheme) =>
       fontSize: theme.type.caption,
       lineHeight: 17,
     },
+    campaignVideoLink: {
+      minHeight: 44,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.xs,
+      paddingVertical: theme.spacing.xs,
+    },
+    campaignVideoLabel: {
+      flex: 1,
+      color: theme.colors.primary,
+      fontSize: theme.type.caption,
+      fontWeight: "700",
+    },
     campaignBudget: {
       color: theme.colors.primary,
       fontSize: theme.type.caption,
@@ -1565,26 +1816,6 @@ const makeStyles = (theme: AppTheme) =>
       paddingHorizontal: theme.spacing.lg,
       gap: theme.spacing.sm,
     },
-    actionList: { paddingHorizontal: theme.spacing.lg, gap: theme.spacing.sm },
-    homeAction: {
-      minHeight: 84,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: theme.spacing.sm,
-      padding: theme.spacing.md,
-      borderRadius: theme.radius.md,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
-      backgroundColor: theme.colors.surface,
-    },
-    homeActionIcon: {
-      width: 44,
-      height: 44,
-      borderRadius: theme.radius.md,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: theme.colors.surfaceMuted,
-    },
     homeActionCopy: { flex: 1, minWidth: 0, gap: 3 },
     homeActionTitle: {
       color: theme.colors.textPrimary,
@@ -1596,42 +1827,42 @@ const makeStyles = (theme: AppTheme) =>
       fontSize: theme.type.caption,
       lineHeight: 17,
     },
-    categoryMasonry: {
-      width: "100%",
+    categoryRail: {
       flexDirection: "row",
-      alignItems: "flex-start",
+      flexWrap: "wrap",
       paddingHorizontal: theme.spacing.lg,
       gap: theme.spacing.sm,
     },
-    categoryColumn: {
-      flexGrow: 1,
-      flexBasis: 0,
-      minWidth: 0,
-      gap: theme.spacing.sm,
-    },
     categoryTile: {
-      width: "100%",
-      minHeight: 128,
+      width: "47%",
+      minWidth: 0,
+      minHeight: 148,
+      justifyContent: "space-between",
       gap: theme.spacing.sm,
       padding: theme.spacing.md,
-      borderRadius: theme.radius.md,
+      borderRadius: theme.radius.lg,
       borderWidth: 1,
-      borderColor: theme.colors.border,
-      backgroundColor: theme.colors.surface,
+      borderColor: theme.colors.cardBorder,
     },
     categoryTileTall: { minHeight: 172 },
+    categoryTileShort: { minHeight: 132 },
+    categoryTileButter: { backgroundColor: theme.colors.surfaceBlush },
+    categoryTileBlush: { backgroundColor: theme.colors.surfaceLilac },
+    categoryTileMint: { backgroundColor: theme.colors.surfaceSky },
+    categoryTileSky: { backgroundColor: theme.colors.surface },
+    categoryTileLilac: { backgroundColor: theme.colors.surfaceRaised },
     categoryHeader: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
     },
     categoryIcon: {
-      width: 40,
-      height: 40,
-      borderRadius: theme.radius.md,
+      width: 52,
+      height: 52,
+      borderRadius: theme.radius.control,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: theme.colors.surfaceMuted,
+      backgroundColor: theme.colors.surfaceRaised,
     },
     categoryCopy: { minWidth: 0, gap: 2 },
     categoryTitle: {
@@ -1650,17 +1881,17 @@ const makeStyles = (theme: AppTheme) =>
       borderRadius: theme.radius.pill,
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: theme.colors.surfaceMuted,
+      backgroundColor: theme.colors.surfaceRaised,
     },
     moreCategory: {
-      width: "100%",
-      minHeight: 188,
+      width: "47%",
+      minWidth: 0,
+      minHeight: 148,
+      justifyContent: "space-between",
       gap: theme.spacing.xs,
-      padding: theme.spacing.md,
-      borderRadius: theme.radius.md,
-      borderWidth: 1,
-      borderColor: theme.colors.primary,
-      backgroundColor: theme.colors.accent,
+      padding: theme.spacing.sm + theme.spacing.xs,
+      borderRadius: theme.radius.lg,
+      backgroundColor: theme.colors.surfaceLilac,
     },
     moreCategoryIcon: {
       width: 40,
@@ -1690,5 +1921,17 @@ const makeStyles = (theme: AppTheme) =>
       fontSize: theme.type.caption,
       fontWeight: "700",
     },
+    briefPreviewList: { gap: theme.spacing.sm },
+    briefPreviewCard: { gap: theme.spacing.sm, marginHorizontal: theme.spacing.lg, backgroundColor: theme.colors.surfaceLilac, borderWidth: 0 },
+    briefToneSky: { backgroundColor: theme.colors.surfaceSky },
+    briefToneMint: { backgroundColor: theme.colors.surfaceMint },
+    briefToneButter: { backgroundColor: theme.colors.surfaceButter },
+    briefToneBlush: { backgroundColor: theme.colors.surfaceBlush },
+    feedHeader: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm },
+    feedIcon: { width: 38, height: 38, borderRadius: theme.radius.md, alignItems: "center", justifyContent: "center", backgroundColor: theme.colors.accent },
+    feedIconText: { color: theme.colors.accentText, fontSize: theme.type.caption, fontWeight: "900", fontFamily: theme.type.bodyFont },
+    feedCopy: { flex: 1, minWidth: 0, gap: 2 },
+    feedTitle: { color: theme.colors.textPrimary, fontSize: theme.type.body, fontWeight: "800", fontFamily: theme.type.bodyFont },
+    feedMeta: { color: theme.colors.textSecondary, fontSize: theme.type.caption, lineHeight: theme.type.lineHeight.caption, fontFamily: theme.type.bodyFont },
     pressed: { opacity: 0.78 },
   });

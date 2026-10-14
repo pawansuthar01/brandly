@@ -1,10 +1,14 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import DateTimePicker, { DateTimePickerEvent } from "@react-native-community/datetimepicker";
 import { Image as ExpoImage } from "expo-image";
 import {
   Animated,
+  ActivityIndicator,
+  Easing,
   Modal,
   Pressable,
+  Platform,
   StyleProp,
   StyleSheet,
   Text,
@@ -15,34 +19,59 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../providers/ThemeProvider";
+import { selectImageAttachment } from "../services/mediaPicker.service";
 import { AppTheme } from "../styles/theme";
+import { createThemeStyles } from "../styles/createThemeStyles";
 import { TabName } from "../types/marketplace";
+
+export const NATIVE_ANIMATIONS_ENABLED = Platform.OS !== "web";
 
 export function AppButton({
   label,
   onPress,
   variant = "primary",
+  tone,
   compact = false,
   icon,
+  iconAfter = false,
   style,
   disabled = false,
+  loading = false,
 }: {
   label: string;
   onPress?: () => void;
   variant?: "primary" | "secondary" | "ghost" | "danger";
+  tone?: "secondary" | "tertiary";
   compact?: boolean;
   icon?: keyof typeof Ionicons.glyphMap;
+  iconAfter?: boolean;
   style?: StyleProp<ViewStyle>;
   disabled?: boolean;
+  loading?: boolean;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
+  const isDisabled = disabled || loading;
+  const buttonColor = (key: string, fallback: string) => typeof theme.components.button?.[key] === "string" ? theme.components.button[key] as string : fallback;
+  const iconColor =
+      tone === "secondary"
+      ? buttonColor("toneSecondaryForeground", theme.colors.secondaryText)
+      : tone === "tertiary"
+      ? buttonColor("toneTertiaryForeground", theme.colors.tertiaryText)
+      : variant === "secondary"
+      ? buttonColor("secondaryForeground", theme.colors.textPrimary)
+      : variant === "danger"
+      ? buttonColor("dangerForeground", theme.colors.primaryText)
+      : variant === "primary"
+      ? buttonColor("foreground", theme.colors.primaryText)
+      : buttonColor("foreground", theme.colors.primary);
   return (
     <Pressable
+      testID="theme-component-button"
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled }}
-      disabled={disabled}
+      accessibilityState={{ disabled: isDisabled, busy: loading }}
+      disabled={isDisabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
@@ -51,20 +80,16 @@ export function AppButton({
         variant === "secondary" && styles.buttonSecondary,
         variant === "ghost" && styles.buttonGhost,
         variant === "danger" && styles.buttonDanger,
-        disabled && styles.buttonDisabled,
+        tone === "secondary" && styles.buttonToneSecondary,
+        tone === "tertiary" && styles.buttonToneTertiary,
+        isDisabled && styles.buttonDisabled,
         pressed && styles.pressed,
       ]}
     >
-      {icon ? (
-        <AppIcon
-          name={icon}
-          size={18}
-          color={
-            variant === "primary" || variant === "danger"
-              ? theme.colors.primaryText
-              : theme.colors.primary
-          }
-        />
+      {loading ? (
+        <ActivityIndicator size="small" color={iconColor} />
+      ) : icon && !iconAfter ? (
+        <AppIcon name={icon} size={16} color={iconColor} />
       ) : null}
       <Text
         style={[
@@ -72,10 +97,15 @@ export function AppButton({
           variant === "secondary" && styles.buttonTextSecondary,
           variant === "ghost" && styles.buttonTextGhost,
           variant === "danger" && styles.buttonTextDanger,
+          tone === "secondary" && styles.buttonTextToneSecondary,
+          tone === "tertiary" && styles.buttonTextToneTertiary,
         ]}
       >
         {label}
       </Text>
+      {!loading && icon && iconAfter ? (
+        <AppIcon name={icon} size={16} color={iconColor} />
+      ) : null}
     </Pressable>
   );
 }
@@ -95,6 +125,7 @@ export function AppCard({
   const styles = makeStyles(theme);
   return (
     <Pressable
+      testID="theme-component-card"
       accessibilityRole={onPress ? "button" : undefined}
       disabled={!onPress}
       onPress={onPress}
@@ -102,6 +133,10 @@ export function AppCard({
         styles.card,
         flat && styles.cardFlat,
         style,
+        typeof theme.components.card.border === "string" && { borderColor: theme.components.card.border },
+        typeof theme.components.card.radius === "number" && { borderRadius: theme.components.card.radius },
+        typeof theme.components.card.borderWidth === "number" && { borderWidth: theme.components.card.borderWidth },
+        typeof theme.components.card.padding === "number" && { padding: theme.components.card.padding },
         pressed && onPress && styles.pressed,
       ]}
     >
@@ -118,8 +153,13 @@ export function ConfirmModal({
   cancelLabel = "Cancel",
   confirmIcon = "checkmark",
   destructive = false,
+  tertiaryLabel,
+  tertiaryIcon = "trash-outline",
+  tertiaryDestructive = false,
   onConfirm,
   onCancel,
+  onTertiary,
+  confirmLoading = false,
 }: {
   visible: boolean;
   title: string;
@@ -128,13 +168,19 @@ export function ConfirmModal({
   cancelLabel?: string;
   confirmIcon?: keyof typeof Ionicons.glyphMap;
   destructive?: boolean;
+  tertiaryLabel?: string;
+  tertiaryIcon?: keyof typeof Ionicons.glyphMap;
+  tertiaryDestructive?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  onTertiary?: () => void;
+  confirmLoading?: boolean;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const { width } = useWindowDimensions();
-  const stackActions = width < 360;
+  const insets = useSafeAreaInsets();
+  const stackActions = width < 360 || Boolean(tertiaryLabel && onTertiary);
   return (
     <Modal
       transparent
@@ -142,7 +188,7 @@ export function ConfirmModal({
       animationType="fade"
       onRequestClose={onCancel}
     >
-      <View style={styles.confirmOverlay}>
+        <View style={[styles.confirmOverlay, { paddingBottom: Math.max(insets.bottom, theme.spacing.lg) }]}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Close confirmation dialog"
@@ -165,6 +211,15 @@ export function ConfirmModal({
               stackActions && styles.confirmActionsStack,
             ]}
           >
+            {tertiaryLabel && onTertiary ? (
+              <AppButton
+                label={tertiaryLabel}
+                variant={tertiaryDestructive ? "danger" : "secondary"}
+                icon={tertiaryIcon}
+                onPress={onTertiary}
+                style={[styles.confirmAction, stackActions && styles.confirmActionStack]}
+              />
+            ) : null}
             <AppButton
               label={cancelLabel}
               variant="secondary"
@@ -176,6 +231,7 @@ export function ConfirmModal({
               variant={destructive ? "danger" : "primary"}
               icon={confirmIcon}
               onPress={onConfirm}
+              loading={confirmLoading}
               style={[styles.confirmAction, stackActions && styles.confirmActionStack]}
             />
           </View>
@@ -233,6 +289,73 @@ export function Avatar({
   );
 }
 
+export function ProfilePhotoPicker({
+  initials,
+  uri,
+  onChange,
+  title = "Profile photo",
+  hint = "Use a clear photo so people recognise you.",
+  compact = false,
+}: {
+  initials: string;
+  uri?: string;
+  onChange: (uri: string) => void;
+  title?: string;
+  hint?: string;
+  compact?: boolean;
+}) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  const [isPicking, setIsPicking] = useState(false);
+  const [pickerError, setPickerError] = useState('');
+  const pickPhoto = async () => {
+    if (isPicking) return;
+    setIsPicking(true);
+    setPickerError('');
+    try {
+      const item = await selectImageAttachment();
+      if (item) onChange(item.uri);
+    } catch {
+      setPickerError('Photo could not be selected. Please try again.');
+    } finally {
+      setIsPicking(false);
+    }
+  };
+  return (
+    <View style={[styles.profilePhotoPicker, compact && styles.profilePhotoPickerCompact]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={uri ? "Change profile image" : title}
+        disabled={isPicking}
+        onPress={pickPhoto}
+        style={({ pressed }) => [compact && styles.profilePhotoCompactPressable, pressed && styles.pressed]}
+      >
+        <Avatar initials={initials} uri={uri} size={compact ? "small" : "large"} />
+        {compact ? (
+          <View style={styles.profilePhotoCameraBadge}>
+            <AppIcon name="camera-outline" size={12} color={theme.colors.primaryText} />
+          </View>
+        ) : null}
+      </Pressable>
+      <View style={[styles.profilePhotoCopy, compact && styles.profilePhotoCopyCompact]}>
+        <Text style={[styles.profilePhotoTitle, compact && styles.profilePhotoTitleCompact]}>{title}</Text>
+        <Text style={[styles.profilePhotoHint, compact && styles.profilePhotoHintCompact]}>{hint}</Text>
+        {pickerError ? <Text accessibilityRole="alert" style={[styles.profilePhotoHint, { color: theme.colors.danger }]}>{pickerError}</Text> : null}
+        {!compact ? (
+          <AppButton
+            label={isPicking ? "Opening photos…" : uri ? "Change photo" : "Upload photo"}
+            variant="secondary"
+            compact
+            icon="image-outline"
+            disabled={isPicking}
+            onPress={pickPhoto}
+          />
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 export function AppIcon({
   name,
   size = 20,
@@ -253,11 +376,13 @@ export function IconButton({
   label,
   onPress,
   selected = false,
+  variant = "default",
 }: {
   name: keyof typeof Ionicons.glyphMap;
   label: string;
   onPress?: () => void;
   selected?: boolean;
+  variant?: "default" | "primary";
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
@@ -269,6 +394,7 @@ export function IconButton({
       onPress={onPress}
       style={({ pressed }) => [
         styles.iconButton,
+        variant === "primary" && styles.iconButtonPrimary,
         selected && styles.iconButtonSelected,
         pressed && styles.pressed,
       ]}
@@ -276,9 +402,72 @@ export function IconButton({
       <AppIcon
         name={name}
         size={20}
-        color={selected ? theme.colors.primary : theme.colors.textPrimary}
+        color={variant === "primary" ? theme.colors.primaryText : selected ? theme.colors.primary : theme.colors.textPrimary}
       />
     </Pressable>
+  );
+}
+
+export type OverflowMenuAction = {
+  label: string;
+  onPress: () => void;
+  destructive?: boolean;
+  icon?: keyof typeof Ionicons.glyphMap;
+};
+
+export function OverflowMenu({ label, actions }: { label: string; actions: OverflowMenuAction[] }) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  const [visible, setVisible] = useState(false);
+  const menuProgress = useRef(new Animated.Value(0)).current;
+  if (!actions.length) return null;
+  const openMenu = () => {
+    setVisible(true);
+    menuProgress.setValue(0);
+    Animated.timing(menuProgress, {
+      toValue: 1,
+      duration: 140,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: NATIVE_ANIMATIONS_ENABLED,
+    }).start();
+  };
+  const closeMenu = () => {
+    menuProgress.stopAnimation();
+    setVisible(false);
+  };
+  return (
+    <View style={styles.overflowWrapper}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        onPress={(event) => {
+          event.stopPropagation();
+          visible ? closeMenu() : openMenu();
+        }}
+        style={({ pressed }) => [styles.overflowButton, pressed && styles.pressed]}
+      >
+        <AppIcon name="ellipsis-horizontal" size={19} color={theme.colors.textSecondary} />
+      </Pressable>
+      {visible ? <>
+        <Pressable accessibilityRole="button" accessibilityLabel="Close actions" onPress={(event) => { event.stopPropagation(); closeMenu(); }} style={styles.menuDismiss} />
+        <Animated.View accessibilityViewIsModal style={[styles.menuCard, { opacity: menuProgress, transform: [{ scale: menuProgress.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }] }]}>
+          {actions.map((action, index) => (
+            <Pressable
+              key={action.label}
+              accessibilityRole="button"
+              accessibilityLabel={action.label}
+              onPress={(event) => { event.stopPropagation(); closeMenu(); action.onPress(); }}
+              style={({ pressed }) => [styles.menuAction, pressed && styles.pressed]}
+            >
+              <View style={[styles.menuActionIcon, index % 3 === 0 ? styles.menuActionIconSky : index % 3 === 1 ? styles.menuActionIconMint : styles.menuActionIconBlush, action.destructive && styles.menuActionIconDanger]}>
+                <AppIcon name={action.icon ?? "chevron-forward-outline"} size={16} color={action.destructive ? theme.colors.danger : theme.colors.primary} />
+              </View>
+              <Text style={[styles.menuActionText, action.destructive && styles.menuActionTextDanger]}>{action.label}</Text>
+            </Pressable>
+          ))}
+        </Animated.View>
+      </> : null}
+    </View>
   );
 }
 
@@ -313,20 +502,42 @@ export function MarketplaceCardSkeleton() {
   );
 }
 
+export function ScreenSkeleton({ count = 3 }: { count?: number }) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  return (
+    <View accessibilityRole="progressbar" accessibilityLabel="Loading content" style={styles.screenSkeleton}>
+      {Array.from({ length: count }, (_, index) => (
+        <View key={index} style={styles.screenSkeletonCard}>
+          <View style={styles.screenSkeletonIcon} />
+          <View style={styles.skeletonContent}>
+            <Skeleton width={index % 2 ? "62%" : "48%"} height={16} />
+            <Skeleton width="86%" height={12} />
+            <Skeleton width={index % 2 ? "42%" : "58%"} height={12} />
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export function Toggle({
   value,
   onChange,
   disabled = false,
+  accessibilityLabel = "Toggle setting",
 }: {
   value: boolean;
   onChange: (value: boolean) => void;
   disabled?: boolean;
+  accessibilityLabel?: string;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   return (
     <Pressable
       accessibilityRole="switch"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ checked: value, disabled }}
       disabled={disabled}
       onPress={() => onChange(!value)}
@@ -340,14 +551,39 @@ export function Toggle({
 export function Pill({
   label,
   accent = false,
+  icon,
+  style,
 }: {
   label: string;
   accent?: boolean;
+  icon?: keyof typeof Ionicons.glyphMap;
+  style?: StyleProp<ViewStyle>;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
+  const statusIcon = icon ?? ({
+    draft: "create-outline",
+    published: "megaphone-outline",
+    open: "radio-outline",
+    "proposal sent": "paper-plane-outline",
+    accepted: "checkmark-circle-outline",
+    completed: "checkmark-circle-outline",
+    closed: "close-circle-outline",
+    archived: "archive-outline",
+    private: "lock-closed-outline",
+    public: "globe-outline",
+    pending: "time-outline",
+    paid: "card-outline",
+    rejected: "close-circle-outline",
+    declined: "close-circle-outline",
+    blocked: "ban-outline",
+    unavailable: "ban-outline",
+    "in progress": "time-outline",
+    "waiting for review": "time-outline",
+  } as Record<string, keyof typeof Ionicons.glyphMap>)[label.trim().toLowerCase()];
   return (
-    <View style={[styles.pill, accent && styles.pillAccent]}>
+    <View testID="theme-component-badge" style={[styles.pill, accent && styles.pillAccent, style]}>
+      {statusIcon ? <AppIcon name={statusIcon} size={13} color={accent ? theme.colors.accentText : theme.colors.textSecondary} /> : null}
       <Text style={[styles.pillText, accent && styles.pillTextAccent]}>
         {label}
       </Text>
@@ -368,6 +604,7 @@ export function FilterChip({
   const styles = makeStyles(theme);
   return (
     <Pressable
+      testID="theme-component-chip"
       accessibilityRole="button"
       accessibilityState={{ selected }}
       onPress={onPress}
@@ -532,7 +769,13 @@ export function SectionTitle({
     <View style={styles.sectionTitle}>
       <Text style={styles.sectionHeading}>{title}</Text>
       {action ? (
-        <Pressable onPress={onAction}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={action}
+          hitSlop={8}
+          onPress={onAction}
+          style={({ pressed }) => [styles.titleAction, pressed && styles.pressed]}
+        >
           <Text style={styles.link}>{action}</Text>
         </Pressable>
       ) : null}
@@ -557,8 +800,9 @@ export function SearchField({
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
+  const [focused, setFocused] = useState(false);
   return (
-    <View style={styles.search}>
+    <View testID="theme-component-input" style={[styles.search, focused && styles.searchFocused]}>
       <AppIcon
         name="search-outline"
         size={20}
@@ -569,7 +813,9 @@ export function SearchField({
         value={value}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={theme.colors.textSecondary}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholderTextColor={theme.colors.inputPlaceholder}
         style={styles.searchInput}
       />
       {onFilter ? (
@@ -584,57 +830,192 @@ export function SearchField({
   );
 }
 
+type DateTimeFieldMode = "date" | "time";
+type DateTimeFieldFormat = "iso" | "short";
+
+const SHORT_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const parseDateTimeFieldValue = (value: string, mode: DateTimeFieldMode) => {
+  const now = new Date();
+  if (mode === "date") {
+    const iso = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) {
+      const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12);
+      if (!Number.isNaN(date.getTime())) return date;
+    }
+    const short = value.match(/^(\d{1,2})\s+([A-Za-z]{3})(?:\s+(\d{4}))?$/);
+    if (short) {
+      const month = SHORT_MONTHS.findIndex((item) => item.toLowerCase() === short[2].toLowerCase());
+      if (month >= 0) return new Date(short[3] ? Number(short[3]) : now.getFullYear(), month, Number(short[1]), 12);
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12) : parsed;
+  }
+  const time = value.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (time) {
+    let hours = Number(time[1]);
+    const minutes = Number(time[2]);
+    const meridiem = time[3]?.toUpperCase();
+    if (meridiem === "PM" && hours < 12) hours += 12;
+    if (meridiem === "AM" && hours === 12) hours = 0;
+    if (hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
+      now.setHours(hours, minutes, 0, 0);
+      return now;
+    }
+  }
+  return now;
+};
+
+const formatDateTimeFieldValue = (date: Date, mode: DateTimeFieldMode, format: DateTimeFieldFormat) => {
+  if (mode === "date") {
+    if (format === "short") return `${String(date.getDate()).padStart(2, "0")} ${SHORT_MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  }
+  const hours = date.getHours();
+  const hour12 = hours % 12 || 12;
+  return `${hour12}:${String(date.getMinutes()).padStart(2, "0")} ${hours >= 12 ? "PM" : "AM"}`;
+};
+
+const isRecognizedDateTimeFieldValue = (value: string, mode: DateTimeFieldMode) =>
+  mode === "date"
+    ? /^(\d{4}-\d{2}-\d{2}|\d{1,2}\s+[A-Za-z]{3})/.test(value)
+    : /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i.test(value);
+
+export function DateTimeField({
+  label,
+  value,
+  onChange,
+  mode,
+  format = "iso",
+  placeholder = "Choose",
+  hideLabel = false,
+  accessibilityLabel,
+  style,
+  minimumDate,
+  maximumDate,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  mode: DateTimeFieldMode;
+  format?: DateTimeFieldFormat;
+  placeholder?: string;
+  hideLabel?: boolean;
+  accessibilityLabel?: string;
+  style?: StyleProp<ViewStyle>;
+  minimumDate?: Date;
+  maximumDate?: Date;
+}) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  const [open, setOpen] = useState(false);
+  const pickerValue = parseDateTimeFieldValue(value, mode);
+  const recognizedValue = isRecognizedDateTimeFieldValue(value.trim(), mode);
+  const displayValue = value.trim()
+    ? mode === "date" && recognizedValue
+      ? `${String(pickerValue.getDate()).padStart(2, "0")} ${SHORT_MONTHS[pickerValue.getMonth()]}${format === "iso" ? ` ${pickerValue.getFullYear()}` : ""}`
+      : value
+    : placeholder;
+  const handleChange = (event: DateTimePickerEvent, selected?: Date) => {
+    if (Platform.OS === "android") setOpen(false);
+    if (event.type === "dismissed" || !selected) return;
+    onChange(formatDateTimeFieldValue(selected, mode, format));
+  };
+  return (
+    <View style={style}>
+      {!hideLabel ? <Text style={styles.dateTimeFieldLabel}>{label}</Text> : null}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel ?? label}
+        onPress={() => setOpen(true)}
+        style={({ pressed }) => [styles.dateTimeField, pressed && styles.pressed]}
+      >
+        <AppIcon name={mode === "date" ? "calendar-outline" : "time-outline"} size={18} color={theme.colors.primary} />
+        <Text style={[styles.dateTimeFieldValue, !value.trim() && styles.dateTimeFieldPlaceholder]}>{displayValue}</Text>
+        <AppIcon name="chevron-down" size={17} color={theme.colors.textSecondary} />
+      </Pressable>
+      {open && Platform.OS === "android" ? (
+        <DateTimePicker value={pickerValue} mode={mode} display="default" onChange={handleChange} minimumDate={minimumDate} maximumDate={maximumDate} />
+      ) : null}
+      {open && Platform.OS === "ios" ? (
+        <Modal transparent animationType="slide" visible onRequestClose={() => setOpen(false)}>
+          <View style={styles.dateTimePickerOverlay}>
+            <Pressable style={styles.dateTimePickerBackdrop} onPress={() => setOpen(false)} />
+            <View style={styles.dateTimePickerCard}>
+              <View style={styles.dateTimePickerHeader}>
+                <Text style={styles.dateTimePickerTitle}>{label}</Text>
+                <AppButton compact variant="secondary" label="Done" onPress={() => setOpen(false)} />
+              </View>
+              <DateTimePicker value={pickerValue} mode={mode} display="spinner" onChange={handleChange} minimumDate={minimumDate} maximumDate={maximumDate} />
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+    </View>
+  );
+}
+
 export function BottomTabs({
   active,
+  role,
   onChange,
   onChat,
   chatActive = false,
+  chatUnreadCount = 0,
 }: {
   active: TabName;
+  role: "Brand" | "Influencer";
   onChange: (tab: TabName) => void;
   onChat: () => void;
   chatActive?: boolean;
+  chatUnreadCount?: number;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
+  const barHeight = typeof theme.components.navigation.height === "number" ? theme.components.navigation.height : 56;
   const tabs: {
     name: TabName | "Chat";
     icon: keyof typeof Ionicons.glyphMap;
-  }[] = [
-    { name: "Home", icon: "home-outline" },
-    { name: "Campaigns", icon: "briefcase-outline" },
-    { name: "Discover", icon: "search-outline" },
-    { name: "Proposals", icon: "paper-plane-outline" },
-    { name: "Chat", icon: "chatbubbles-outline" },
-    { name: "Profile", icon: "person-outline" },
-  ];
-  const activeIndex = Math.max(
-    0,
-    tabs.findIndex((tab) => (chatActive ? tab.name === "Chat" : tab.name === active)),
-  );
+  }[] = role === "Brand"
+      ? [
+        { name: "Home", icon: "home-outline" },
+        { name: "Campaigns", icon: "megaphone-outline" },
+        { name: "Discover", icon: "people-outline" },
+        { name: "Chat", icon: "chatbubbles-outline" },
+        { name: "Calendar", icon: "calendar-outline" },
+        { name: "Budget", icon: "wallet-outline" },
+      ]
+    : [
+        { name: "Home", icon: "home-outline" },
+        { name: "Studio", icon: "videocam-outline" },
+        { name: "Calendar", icon: "calendar-outline" },
+        { name: "Market", icon: "briefcase-outline" },
+        { name: "Chat", icon: "chatbubbles-outline" },
+      ];
+  const isCompact = width / tabs.length < 54;
+  const matchedIndex = tabs.findIndex((tab) => (chatActive ? tab.name === "Chat" : tab.name === active));
+  const activeIndex = Math.max(0, matchedIndex);
   const indicator = useRef(new Animated.Value(activeIndex)).current;
-  const isCompact = width < 360;
-  const tabWidth = Math.max(0, width / tabs.length);
-  const tabVisualWidth = isCompact ? 40 : 46;
+  const tabWidth = width / tabs.length;
   useEffect(() => {
-    Animated.spring(indicator, {
+    Animated.timing(indicator, {
       toValue: activeIndex,
-      useNativeDriver: true,
-      friction: 9,
-      tension: 100,
+      duration: 240,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: NATIVE_ANIMATIONS_ENABLED,
     }).start();
   }, [activeIndex, indicator]);
   return (
     <View
+      testID="theme-component-navigation"
       style={[
         styles.tabs,
         {
-          paddingBottom: Math.max(
-            insets.bottom - theme.spacing.md,
-            theme.spacing.xs,
-          ),
+          height: barHeight + insets.bottom,
+          minHeight: barHeight + insets.bottom,
+          paddingBottom: insets.bottom,
         },
       ]}
     >
@@ -643,27 +1024,28 @@ export function BottomTabs({
         style={[
           styles.tabIndicator,
           {
-            width: tabVisualWidth,
+            width: tabWidth,
+            height: barHeight,
+            bottom: insets.bottom,
+            opacity: matchedIndex >= 0 ? 1 : 0,
             transform: [
               {
                 translateX: indicator.interpolate({
-                  inputRange: [0, tabs.length - 1],
-                  outputRange: [
-                    (tabWidth - tabVisualWidth) / 2,
-                    (tabWidth - tabVisualWidth) / 2 + tabWidth * (tabs.length - 1),
-                  ],
+                  inputRange: [0, Math.max(1, tabs.length - 1)],
+                  outputRange: [0, tabWidth * Math.max(1, tabs.length - 1)],
                 }),
               },
             ],
           },
         ]}
-      />
+      ><View style={styles.tabIndicatorLine} /></Animated.View>
       {tabs.map((tab) => (
         <BottomTabItem
           key={tab.name}
           tab={tab}
           active={chatActive ? tab.name === "Chat" : active === tab.name}
           compact={isCompact}
+          chatUnreadCount={tab.name === "Chat" ? chatUnreadCount : 0}
           onPress={() =>
             tab.name === "Chat" ? onChat() : onChange(tab.name)
           }
@@ -677,24 +1059,17 @@ function BottomTabItem({
   tab,
   active,
   compact,
+  chatUnreadCount = 0,
   onPress,
 }: {
   tab: { name: TabName | "Chat"; icon: keyof typeof Ionicons.glyphMap };
   active: boolean;
   compact: boolean;
+  chatUnreadCount?: number;
   onPress: () => void;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
-  const progress = useRef(new Animated.Value(active ? 1 : 0)).current;
-  useEffect(() => {
-    Animated.spring(progress, {
-      toValue: active ? 1 : 0,
-      useNativeDriver: true,
-      friction: 7,
-    }).start();
-  }, [active, progress]);
-  const isCenter = false;
   return (
     <Pressable
       accessibilityRole="tab"
@@ -703,73 +1078,91 @@ function BottomTabItem({
       onPress={onPress}
       style={({ pressed }) => [styles.tab, pressed && styles.pressed]}
     >
-      <Animated.View
+      <View style={[styles.tabIconWrap, compact && styles.tabIconWrapCompact]}>
+          <AppIcon
+            name={tab.icon}
+            size={18}
+            color={
+              active ? theme.colors.accentText : theme.colors.textSecondary
+            }
+        />
+        {chatUnreadCount > 0 ? <View style={styles.tabUnreadBadge}><Text style={styles.tabUnreadText}>{chatUnreadCount > 9 ? "9+" : chatUnreadCount}</Text></View> : null}
+      </View>
+      <Text
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.82}
         style={[
-          isCenter ? styles.tabCenter : styles.tabIconWrap,
-          compact && !isCenter && styles.tabIconWrapCompact,
-          isCenter && active && styles.tabCenterActive,
-          {
-            transform: [
-              {
-                scale: progress.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [1, isCenter ? 1 : 1.06],
-                }),
-              },
-            ],
-          },
+          styles.tabLabel,
+          compact && styles.tabLabelCompact,
+          active && styles.tabLabelActive,
         ]}
       >
-        <AppIcon
-          name={tab.icon}
-          size={compact ? 22 : 24}
-          color={
-            active ? theme.colors.primary : theme.colors.textSecondary
-          }
-        />
-      </Animated.View>
-      <Text style={[styles.tabLabel, compact && styles.tabLabelCompact, active && styles.tabActive]}>
         {tab.name}
       </Text>
     </Pressable>
   );
 }
 
-const makeStyles = (theme: AppTheme) =>
-  StyleSheet.create({
+const makeStyles = (theme: AppTheme) => {
+  const color = (component: string, key: string, fallback: string) => typeof theme.components[component]?.[key] === "string" ? theme.components[component][key] as string : fallback;
+  const number = (component: string, key: string, fallback: number) => typeof theme.components[component]?.[key] === "number" ? theme.components[component][key] as number : fallback;
+  return createThemeStyles(theme, {
     button: {
-      minHeight: 48,
+      minHeight: number("button", "height", 44),
       flexDirection: "row",
       paddingHorizontal: theme.spacing.md,
-      borderRadius: theme.radius.md,
+      borderRadius: number("button", "radius", theme.radius.md),
       alignItems: "center",
       justifyContent: "center",
-      gap: theme.spacing.xs,
-      backgroundColor: theme.colors.primary,
+      gap: theme.spacing.sm,
+      backgroundColor: color("button", "background", theme.colors.primary),
     },
-    buttonCompact: { minHeight: 44, paddingHorizontal: theme.spacing.md },
-    buttonSecondary: { backgroundColor: theme.colors.surfaceMuted },
-    buttonGhost: { backgroundColor: theme.colors.transparent },
-    buttonDanger: { backgroundColor: theme.colors.danger },
-    buttonDisabled: { opacity: 0.48 },
+    buttonCompact: {
+      minHeight: 44,
+      paddingHorizontal: theme.spacing.sm + theme.spacing.xs,
+      borderRadius: theme.radius.control,
+    },
+    buttonSecondary: {
+      backgroundColor: color("button", "secondaryBackground", theme.colors.surfaceLilac),
+      borderWidth: theme.borders.width,
+      borderColor: theme.colors.cardBorder,
+      shadowOpacity: 0,
+      elevation: 0,
+    },
+    buttonGhost: { backgroundColor: theme.colors.transparent, shadowOpacity: 0, elevation: 0 },
+    buttonDanger: { backgroundColor: color("button", "dangerBackground", theme.colors.danger) },
+    buttonToneSecondary: { backgroundColor: color("button", "toneSecondaryBackground", theme.colors.secondary) },
+    buttonToneTertiary: { backgroundColor: color("button", "toneTertiaryBackground", theme.colors.tertiary) },
+    buttonDisabled: { opacity: theme.opacity.disabled },
     buttonText: {
-      color: theme.colors.primaryText,
-      fontWeight: "700",
+      color: color("button", "foreground", theme.colors.primaryText),
+      fontWeight: "500",
       fontSize: theme.type.body,
+      fontFamily: theme.type.bodyFont,
+      lineHeight: theme.type.lineHeight.body,
       flexShrink: 1,
       textAlign: "center",
     },
-    buttonTextSecondary: { color: theme.colors.textPrimary },
+    buttonTextSecondary: { color: color("button", "secondaryForeground", theme.colors.textPrimary) },
     buttonTextGhost: { color: theme.colors.primary },
-    buttonTextDanger: { color: theme.colors.primaryText },
+    buttonTextDanger: { color: color("button", "dangerForeground", theme.colors.primaryText) },
+    buttonTextToneSecondary: { color: color("button", "toneSecondaryForeground", theme.colors.secondaryText) },
+    buttonTextToneTertiary: { color: color("button", "toneTertiaryForeground", theme.colors.tertiaryText) },
     card: {
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.radius.lg,
-      padding: theme.spacing.md,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
+      backgroundColor: color("card", "background", theme.colors.surfaceRaised),
+      borderRadius: number("card", "radius", theme.radius.lg),
+      padding: number("card", "padding", theme.spacing.md),
+      borderWidth: number("card", "borderWidth", theme.borders.width),
+      borderColor: color("card", "border", theme.colors.cardBorder),
     },
-    cardFlat: { borderWidth: 0, borderColor: theme.colors.transparent },
+    cardFlat: {
+      borderWidth: 0,
+      borderColor: theme.colors.transparent,
+      shadowOpacity: 0,
+      shadowRadius: 0,
+      elevation: 0,
+    },
     confirmOverlay: {
       flex: 1,
       alignItems: "center",
@@ -781,12 +1174,15 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: theme.colors.overlay,
     },
     confirmCard: {
+      ...theme.shadows.modal,
       width: "100%",
       maxWidth: 420,
       gap: theme.spacing.sm,
       padding: theme.spacing.lg,
-      borderRadius: theme.radius.lg,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: color("dialog", "background", theme.colors.surfaceRaised),
+      borderColor: color("dialog", "border", theme.colors.cardBorder),
+      borderWidth: number("dialog", "borderWidth", theme.borders.width),
+      borderRadius: number("dialog", "radius", theme.radius.lg),
     },
     confirmIcon: {
       width: 48,
@@ -800,11 +1196,13 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.textPrimary,
       fontSize: theme.type.title,
       fontWeight: "900",
+      fontFamily: theme.type.displayFont,
     },
     confirmMessage: {
       color: theme.colors.textSecondary,
       fontSize: theme.type.body,
-      lineHeight: 21,
+      fontFamily: theme.type.bodyFont,
+      lineHeight: theme.type.lineHeight.body,
     },
     confirmActions: {
       flexDirection: "row",
@@ -814,7 +1212,7 @@ const makeStyles = (theme: AppTheme) =>
     confirmAction: { flex: 1 },
     confirmActionsStack: { flexDirection: "column" },
     confirmActionStack: { width: "100%", flex: 0 },
-    pressed: { opacity: 0.78 },
+    pressed: { opacity: 0.82, transform: [{ scale: 0.985 }] },
     iconButton: {
       width: 44,
       height: 44,
@@ -824,6 +1222,38 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: theme.colors.surfaceMuted,
     },
     iconButtonSelected: { backgroundColor: theme.colors.accent },
+    iconButtonPrimary: { width: 48, height: 48, borderRadius: theme.radius.pill, backgroundColor: theme.colors.primary, ...theme.shadows.floating },
+    overflowButton: {
+      width: 44,
+      height: 44,
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: theme.radius.pill,
+      backgroundColor: theme.colors.surfaceMuted,
+    },
+    overflowWrapper: { position: "relative", zIndex: 20 },
+    menuDismiss: { position: "absolute", top: 48, right: -1000, bottom: -1000, left: -1000 },
+    menuCard: {
+      position: "absolute",
+      top: 48,
+      right: 0,
+      width: 176,
+      gap: 1,
+      padding: 2,
+      borderRadius: theme.radius.control,
+      backgroundColor: color("list", "background", theme.colors.surfaceLilac),
+      borderWidth: 1,
+      borderColor: theme.colors.cardBorder,
+      ...theme.shadows.modal,
+    },
+    menuAction: { width: "100%", minHeight: 34, flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 2, borderRadius: theme.radius.sm, backgroundColor: theme.colors.transparent },
+    menuActionIcon: { width: 22, height: 22, alignItems: "center", justifyContent: "center", borderRadius: theme.radius.pill },
+    menuActionIconSky: { backgroundColor: theme.colors.surfaceSky },
+    menuActionIconMint: { backgroundColor: theme.colors.surfaceMint },
+    menuActionIconBlush: { backgroundColor: theme.colors.surfaceBlush },
+    menuActionIconDanger: { backgroundColor: theme.colors.surfaceBlush },
+    menuActionText: { color: theme.colors.textPrimary, fontSize: theme.type.caption - 1, lineHeight: theme.type.lineHeight.caption - 2, fontWeight: "700", fontFamily: theme.type.bodyFont, flexShrink: 1, textAlign: "center" },
+    menuActionTextDanger: { color: theme.colors.danger },
     avatar: {
       width: 48,
       height: 48,
@@ -842,18 +1272,59 @@ const makeStyles = (theme: AppTheme) =>
     },
     avatarTextLarge: { fontSize: theme.type.title },
     avatarImage: { width: "100%", height: "100%" },
+    profilePhotoPicker: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.md,
+      paddingVertical: theme.spacing.sm,
+    },
+    profilePhotoPickerCompact: { gap: theme.spacing.sm, paddingVertical: 4 },
+    profilePhotoCompactPressable: { position: "relative", minWidth: 48, minHeight: 48, alignItems: "center", justifyContent: "center" },
+    profilePhotoCameraBadge: {
+      position: "absolute",
+      right: -2,
+      bottom: -2,
+      width: 20,
+      height: 20,
+      borderRadius: theme.radius.pill,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: theme.colors.primary,
+      borderWidth: 2,
+      borderColor: theme.colors.background,
+    },
+    profilePhotoCopy: { flex: 1, gap: theme.spacing.xs },
+    profilePhotoCopyCompact: { gap: 2 },
+    profilePhotoTitle: {
+      color: theme.colors.textPrimary,
+      fontSize: theme.type.bodyLarge,
+      fontWeight: "800",
+      fontFamily: theme.type.bodyFont,
+    },
+    profilePhotoTitleCompact: { fontSize: theme.type.body, lineHeight: 18 },
+    profilePhotoHint: {
+      color: theme.colors.textSecondary,
+      fontSize: theme.type.caption,
+      fontFamily: theme.type.bodyFont,
+      lineHeight: theme.type.lineHeight.caption,
+    },
+    profilePhotoHintCompact: { fontSize: 10, lineHeight: 14 },
     pill: {
       alignSelf: "flex-start",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
       paddingHorizontal: theme.spacing.sm,
       paddingVertical: theme.spacing.xs,
-      borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.surfaceMuted,
+      borderRadius: number("badge", "radius", theme.radius.pill),
+      backgroundColor: color("badge", "background", theme.colors.surfaceMuted),
     },
     pillAccent: { backgroundColor: theme.colors.accent },
     pillText: {
-      color: theme.colors.textSecondary,
+      color: color("badge", "foreground", theme.colors.textSecondary),
       fontSize: theme.type.caption,
       fontWeight: "700",
+      fontFamily: theme.type.bodyFont,
     },
     pillTextAccent: { color: theme.colors.accentText },
     sectionTitle: {
@@ -866,11 +1337,14 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.textPrimary,
       fontSize: theme.type.title,
       fontWeight: "800",
+      fontFamily: theme.type.displayFont,
     },
+    titleAction: { minHeight: 44, justifyContent: "center" },
     link: {
       color: theme.colors.primary,
       fontSize: theme.type.body,
       fontWeight: "700",
+      fontFamily: theme.type.bodyFont,
     },
     filterChip: {
       minHeight: 44,
@@ -878,19 +1352,20 @@ const makeStyles = (theme: AppTheme) =>
       alignItems: "center",
       gap: theme.spacing.xs,
       paddingHorizontal: theme.spacing.md,
-      borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.surface,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
+      borderRadius: number("chip", "radius", theme.radius.pill),
+      backgroundColor: color("chip", "background", theme.colors.surfaceRaised),
+      borderWidth: theme.borders.width,
+      borderColor: color("chip", "border", theme.colors.border),
     },
     filterChipSelected: {
-      backgroundColor: theme.colors.accent,
+      backgroundColor: color("chip", "background", theme.colors.accent),
       borderColor: theme.colors.primary,
     },
     filterChipText: {
       color: theme.colors.textSecondary,
       fontSize: theme.type.caption,
       fontWeight: "700",
+      fontFamily: theme.type.bodyFont,
     },
     filterChipTextSelected: { color: theme.colors.primary },
     rangeSlider: { gap: theme.spacing.md, paddingVertical: theme.spacing.xs },
@@ -906,18 +1381,20 @@ const makeStyles = (theme: AppTheme) =>
       paddingVertical: theme.spacing.xs,
       borderRadius: theme.radius.sm,
       borderWidth: 1,
-      borderColor: theme.colors.border,
-      backgroundColor: theme.colors.surfaceMuted,
+      borderColor: theme.colors.cardBorder,
+      backgroundColor: theme.colors.inputBackground,
     },
     rangeValueLabel: {
       color: theme.colors.textSecondary,
       fontSize: theme.type.caption,
       fontWeight: "700",
+      fontFamily: theme.type.bodyFont,
     },
     rangeValueText: {
       color: theme.colors.textPrimary,
       fontSize: theme.type.body,
       fontWeight: "800",
+      fontFamily: theme.type.bodyFont,
     },
     rangeTrackTouch: {
       height: 44,
@@ -945,14 +1422,14 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: theme.colors.primary,
     },
     search: {
-      minHeight: 56,
+      minHeight: number("input", "height", 56),
       flexDirection: "row",
       alignItems: "center",
       gap: theme.spacing.sm,
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.radius.md,
-      borderWidth: 1,
-      borderColor: theme.colors.border,
+      backgroundColor: color("input", "background", theme.colors.inputBackground),
+      borderRadius: number("input", "radius", theme.radius.md),
+      borderWidth: theme.borders.width,
+      borderColor: color("input", "border", theme.colors.border),
       paddingLeft: theme.spacing.md,
       paddingRight: theme.spacing.xs,
     },
@@ -961,63 +1438,118 @@ const makeStyles = (theme: AppTheme) =>
       flex: 1,
       color: theme.colors.textPrimary,
       fontSize: theme.type.body,
+      fontFamily: theme.type.bodyFont,
     },
+    searchFocused: { borderColor: theme.colors.focus, backgroundColor: theme.colors.surfaceRaised },
+    dateTimeFieldLabel: { marginBottom: theme.spacing.xs, color: theme.colors.textPrimary, fontSize: theme.type.caption, fontWeight: "800", fontFamily: theme.type.bodyFont },
+    dateTimeField: { minHeight: 48, flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, paddingHorizontal: theme.spacing.sm, borderWidth: 1, borderColor: theme.colors.border, borderRadius: theme.radius.control, backgroundColor: theme.colors.inputBackground },
+    dateTimeFieldValue: { flex: 1, color: theme.colors.textPrimary, fontSize: theme.type.body, fontFamily: theme.type.bodyFont },
+    dateTimeFieldPlaceholder: { color: theme.colors.inputPlaceholder },
+    dateTimePickerOverlay: { flex: 1, justifyContent: "flex-end" },
+    dateTimePickerBackdrop: { ...StyleSheet.absoluteFill, backgroundColor: theme.colors.overlay },
+    dateTimePickerCard: { padding: theme.spacing.lg, gap: theme.spacing.md, borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg, backgroundColor: theme.colors.surfaceRaised },
+    dateTimePickerHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: theme.spacing.sm },
+    dateTimePickerTitle: { flex: 1, color: theme.colors.textPrimary, fontSize: theme.type.title, fontWeight: "800", fontFamily: theme.type.displayFont },
     tabs: {
-      minHeight: 54,
+      minHeight: number("navigation", "height", 56),
+      height: number("navigation", "height", 56),
       position: "relative",
       flexDirection: "row",
-      backgroundColor: theme.colors.surface,
-      paddingTop: theme.spacing.xs,
+      backgroundColor: color("navigation", "background", theme.colors.surfaceRaised),
+      paddingTop: 0,
+      borderTopWidth: theme.borders.width,
+      borderTopColor: color("navigation", "border", theme.colors.cardBorder),
+      overflow: "hidden",
+    },
+    tab: {
+      minHeight: number("navigation", "height", 56),
+      flex: 1,
+      minWidth: 0,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 2,
+      paddingHorizontal: 1,
+      zIndex: 1,
     },
     tabIndicator: {
       position: "absolute",
-      top: theme.spacing.xs,
-      width: 46,
-      height: 34,
-      borderRadius: theme.radius.md,
-      backgroundColor: theme.colors.accent,
+      left: 0,
+      zIndex: 0,
+      backgroundColor: color("tabs", "background", theme.colors.accent),
+      borderBottomLeftRadius: theme.radius.control,
+      borderBottomRightRadius: theme.radius.control,
     },
-    tab: {
-      minHeight: 48,
-      flex: 1,
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 1,
-      zIndex: 1,
+    tabIndicatorLine: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+      top: 0,
+      height: 3,
+      borderRadius: theme.radius.pill,
+      backgroundColor: color("tabs", "border", theme.colors.primary),
     },
     tabIconWrap: {
-      width: 46,
-      height: 34,
+      width: 24,
+      height: 18,
       alignItems: "center",
       justifyContent: "center",
     },
-    tabIconWrapCompact: { width: 40 },
-    tabCenter: {
-      width: 46,
-      height: 34,
+    tabIconWrapCompact: { width: 24 },
+    tabUnreadBadge: {
+      position: "absolute",
+      top: -7,
+      right: -11,
+      minWidth: 17,
+      height: 17,
+      paddingHorizontal: 3,
+      borderRadius: theme.radius.pill,
       alignItems: "center",
       justifyContent: "center",
+      backgroundColor: theme.colors.danger,
+      borderWidth: 2,
+      borderColor: theme.colors.surfaceRaised,
     },
-    tabCenterActive: {
-      borderRadius: theme.radius.md,
-    },
+    tabUnreadText: { color: theme.colors.primaryText, fontSize: 9, lineHeight: 11, fontWeight: "800" },
     tabIcon: { color: theme.colors.textSecondary, fontSize: theme.type.title },
     tabLabel: {
+      width: "100%",
+      flexShrink: 1,
       color: theme.colors.textSecondary,
       fontSize: 10,
-      lineHeight: 12,
+      lineHeight: 13,
+      fontWeight: "900",
+      fontFamily: theme.type.bodyFont,
+      textAlign: "center",
     },
-    tabLabelCompact: { fontSize: theme.type.caption - 2 },
-    tabActive: { color: theme.colors.primary, fontWeight: "700" },
+    tabLabelActive: { color: theme.colors.accentText },
+    tabLabelCompact: { fontSize: 9.5, lineHeight: 12 },
     marketplaceSkeleton: {
       flexDirection: "row",
       gap: theme.spacing.md,
       padding: theme.spacing.md,
       borderRadius: theme.radius.lg,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.colors.surfaceRaised,
       borderWidth: 1,
-      borderColor: theme.colors.border,
+      borderColor: theme.colors.cardBorder,
       marginBottom: theme.spacing.sm,
+    },
+    screenSkeleton: { gap: theme.spacing.sm },
+    screenSkeletonCard: {
+      minHeight: 104,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.md,
+      padding: theme.spacing.md,
+      borderRadius: theme.radius.lg,
+      backgroundColor: color("list", "background", theme.colors.surfaceRaised),
+      borderWidth: theme.borders.width,
+      borderColor: color("list", "border", theme.colors.cardBorder),
+    },
+    screenSkeletonIcon: {
+      width: 48,
+      height: 48,
+      borderRadius: theme.radius.control,
+      backgroundColor: theme.colors.surfaceMuted,
     },
     skeletonAvatar: {
       width: 52,
@@ -1049,7 +1581,8 @@ const makeStyles = (theme: AppTheme) =>
       width: 20,
       height: 20,
       borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.colors.surfaceRaised,
     },
     toggleThumbOn: { alignSelf: "flex-end" },
   });
+};

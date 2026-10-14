@@ -1,4 +1,5 @@
 import {
+  FlatList,
   Linking,
   Modal,
   Pressable,
@@ -9,7 +10,8 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Image as ExpoImage } from "expo-image";
 import {
   AppButton,
@@ -21,11 +23,71 @@ import {
 } from "./ui";
 import { useTheme } from "../providers/ThemeProvider";
 import { AppTheme } from "../styles/theme";
+import { createThemeStyles } from "../styles/createThemeStyles";
+import { SOCIAL_PLATFORM_REGISTRY } from "../features/marketplace/marketplaceDomain";
+import { formatDisplayDateTime } from "../lib/dateTime";
+import type { AppIconName } from "../features/marketplace/marketplaceDomain";
 import {
   DemoAttachment,
   DemoProposal,
+  DeliverySchedule,
+  Influencer,
+  PublicCreatorProfile,
   SocialPlatform,
+  SocialVerificationStatus,
 } from "../types/marketplace";
+
+type CreatorProfileCardProps = {
+  creator: Influencer | PublicCreatorProfile;
+  onPress?: () => void;
+  showBio?: boolean;
+  showTags?: boolean;
+};
+
+export function CreatorProfileCard({ creator, onPress, showBio = false, showTags = true }: CreatorProfileCardProps) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  const publicCreator = "bio" in creator ? creator : undefined;
+  return (
+    <AppCard onPress={onPress} style={styles.creatorProfileCard}>
+      <View style={styles.creatorProfileHeader}>
+        <Avatar initials={creator.initials} uri={creator.avatarUrl} size="normal" />
+        <View style={styles.flex}>
+          <Text numberOfLines={1} style={styles.creatorProfileName}>{creator.name}</Text>
+          <Text numberOfLines={2} style={styles.creatorProfileMeta}>{creator.niche} · {creator.city}</Text>
+        </View>
+        <Pill label={`${creator.rating} rating`} accent />
+      </View>
+      {showBio && publicCreator?.bio ? <Text style={styles.creatorProfileBio}>{publicCreator.bio}</Text> : null}
+      <View style={styles.creatorProfileStats}>
+        <View style={[styles.creatorProfileStat, styles.creatorProfileStatSky]}>
+          <Text style={styles.creatorProfileValue}>{creator.followers}</Text>
+          <Text style={styles.creatorProfileLabel}>Followers</Text>
+        </View>
+        <View style={[styles.creatorProfileStat, styles.creatorProfileStatMint]}>
+          <Text style={styles.creatorProfileValue}>{creator.reviews}</Text>
+          <Text style={styles.creatorProfileLabel}>Reviews</Text>
+        </View>
+        <View style={[styles.creatorProfileStat, styles.creatorProfileStatBlush]}>
+          <Text numberOfLines={1} style={styles.creatorProfileValue}>{creator.price}</Text>
+          <Text style={styles.creatorProfileLabel}>Starting rate</Text>
+        </View>
+      </View>
+      {showTags ? (
+        <View style={styles.creatorProfileTags}>
+          {creator.platforms.slice(0, 3).map((platform) => <Pill key={platform} label={platform} />)}
+          {creator.contentTypes.slice(0, 2).map((contentType) => <Pill key={contentType} label={contentType} />)}
+        </View>
+      ) : null}
+      {onPress ? (
+        <View style={styles.creatorProfileFooter}>
+          <Text style={styles.creatorProfileAction}>View public profile</Text>
+          <AppIcon name="arrow-forward" size={18} color={theme.colors.primary} />
+        </View>
+      ) : null}
+    </AppCard>
+  );
+}
 
 export function ProposalCard({
   proposal,
@@ -34,6 +96,7 @@ export function ProposalCard({
   onDecline,
   onChat,
   onViewDetails,
+  onReminderPress,
 }: {
   proposal: DemoProposal;
   onPress?: () => void;
@@ -41,6 +104,7 @@ export function ProposalCard({
   onDecline?: () => void;
   onChat?: () => void;
   onViewDetails?: () => void;
+  onReminderPress?: () => void;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
@@ -122,6 +186,10 @@ export function ProposalCard({
           {proposal.deliverables}
         </Text>
       </View>
+      <DeliveryScheduleCard
+        schedule={proposal.schedule}
+        onReminderPress={onReminderPress}
+      />
       <Text style={styles.proposalMessage}>
         {proposal.message}
       </Text>
@@ -131,7 +199,7 @@ export function ProposalCard({
           stackActions && styles.proposalFooterStack,
         ]}
       >
-        <Text style={styles.proposalUpdated}>{proposal.updatedAt}</Text>
+        <Text style={styles.proposalUpdated}>{formatDisplayDateTime(proposal.updatedAt)}</Text>
         <View
           style={[styles.proposalActions, stackActions && styles.proposalActionsStack]}
         >
@@ -201,6 +269,80 @@ export function ProposalCard({
         onConfirm={confirmProposalAction}
       />
     </>
+  );
+}
+
+export function DeliveryScheduleCard({
+  schedule,
+  onReminderPress,
+}: {
+  schedule?: DeliverySchedule;
+  onReminderPress?: () => void;
+}) {
+  const { theme } = useTheme();
+  const styles = makeStyles(theme);
+  if (!schedule) return null;
+  return (
+    <View style={styles.deliverySchedule}>
+      <View style={styles.deliveryScheduleCopy}>
+        <View style={styles.deliveryScheduleIcon}>
+          <AppIcon
+            name="calendar-outline"
+            size={16}
+            color={theme.colors.primary}
+          />
+        </View>
+        <View style={styles.deliveryScheduleText}>
+          <Text style={styles.proposalSectionLabel}>{schedule.format}</Text>
+          <Text style={styles.deliveryScheduleValue}>
+            {schedule.deliveryDate} · {schedule.deliveryTime}
+          </Text>
+        </View>
+      </View>
+      {onReminderPress ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={schedule.reminderSet ? "Edit delivery reminder" : "Set delivery reminder"}
+          onPress={onReminderPress}
+          style={({ pressed }) => [
+            styles.deliveryReminder,
+            styles.deliveryReminderAction,
+            pressed && styles.pressed,
+          ]}
+        >
+          <AppIcon
+            name={schedule.reminderSet ? "notifications-outline" : "alarm-outline"}
+            size={15}
+            color={schedule.reminderSet ? theme.colors.success : theme.colors.textSecondary}
+          />
+          <Text
+            style={[
+              styles.deliveryReminderText,
+              !schedule.reminderSet && styles.deliveryReminderTextMuted,
+            ]}
+          >
+            {schedule.reminderSet ? "Reminder set" : "Set reminder"}
+          </Text>
+          <AppIcon name="chevron-forward" size={16} color={theme.colors.textSecondary} />
+        </Pressable>
+      ) : (
+        <View style={styles.deliveryReminder}>
+          <AppIcon
+            name="notifications-outline"
+            size={15}
+            color={schedule.reminderSet ? theme.colors.success : theme.colors.textSecondary}
+          />
+          <Text
+            style={[
+              styles.deliveryReminderText,
+              !schedule.reminderSet && styles.deliveryReminderTextMuted,
+            ]}
+          >
+            {schedule.reminderSet ? "Reminder set" : "No reminder"}
+          </Text>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -312,21 +454,35 @@ function Meta({
 export function SocialLinks({
   links,
 }: {
-  links: { platform: SocialPlatform; handle: string; verified?: boolean }[];
+  links: {
+    platform: SocialPlatform;
+    handle: string;
+    verified?: boolean;
+    verificationStatus?: SocialVerificationStatus;
+  }[];
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const openSocialProfile = (platform: SocialPlatform, handle: string) => {
+    if (/^https?:\/\//i.test(handle.trim())) {
+      void Linking.openURL(handle.trim()).catch(() => undefined);
+      return;
+    }
     const cleanHandle = handle.replace(/^@/, "").split("·")[0].trim();
     const urls: Partial<Record<SocialPlatform, string>> = {
       Instagram: `https://instagram.com/${encodeURIComponent(cleanHandle)}`,
       YouTube: `https://youtube.com/@${encodeURIComponent(cleanHandle)}`,
+      Threads: `https://www.threads.net/@${encodeURIComponent(cleanHandle)}`,
       LinkedIn: `https://www.linkedin.com/in/${encodeURIComponent(cleanHandle.replace(/\s+/g, "-"))}`,
       Pinterest: `https://pinterest.com/${encodeURIComponent(cleanHandle)}`,
-      TikTok: `https://tiktok.com/@${encodeURIComponent(cleanHandle)}`,
       Facebook: `https://facebook.com/${encodeURIComponent(cleanHandle)}`,
       X: `https://x.com/${encodeURIComponent(cleanHandle)}`,
       Snapchat: `https://www.snapchat.com/add/${encodeURIComponent(cleanHandle)}`,
+      Twitch: `https://www.twitch.tv/${encodeURIComponent(cleanHandle)}`,
+      Reddit: `https://www.reddit.com/user/${encodeURIComponent(cleanHandle)}`,
+      Discord: `https://discord.com/users/${encodeURIComponent(cleanHandle)}`,
+      Medium: `https://medium.com/@${encodeURIComponent(cleanHandle)}`,
+      Behance: `https://www.behance.net/${encodeURIComponent(cleanHandle)}`,
     };
     const url = urls[platform];
     if (url) void Linking.openURL(url).catch(() => undefined);
@@ -334,6 +490,12 @@ export function SocialLinks({
   return (
     <View style={styles.socialLinks}>
       {links.map((link) => (
+        (() => {
+          const config = SOCIAL_PLATFORM_REGISTRY.find((item) => item.key === link.platform);
+          const isVerified = link.verificationStatus
+            ? link.verificationStatus === "VERIFIED"
+            : Boolean(link.verified);
+          return (
         <Pressable
           key={`${link.platform}-${link.handle}`}
           accessibilityRole="link"
@@ -343,9 +505,9 @@ export function SocialLinks({
         >
           <View style={styles.socialIcon}>
             <AppIcon
-              name="link-outline"
+              name={config?.icon ?? "link-outline"}
               size={17}
-              color={theme.colors.primary}
+              color={config?.color ?? theme.colors.primary}
             />
           </View>
           <View style={styles.socialCopy}>
@@ -354,8 +516,19 @@ export function SocialLinks({
               {link.handle}
             </Text>
           </View>
-          {link.verified ? <Pill label="Linked" /> : null}
+          <View style={styles.socialStatus}>
+            <AppIcon
+              name={isVerified ? "checkmark-circle" : "time-outline"}
+              size={15}
+              color={isVerified ? "#2563EB" : theme.colors.warning}
+            />
+            <Text style={[styles.socialStatusText, isVerified ? styles.socialStatusVerified : styles.socialStatusReview]}>
+              {isVerified ? "Verified" : "Review"}
+            </Text>
+          </View>
         </Pressable>
+          );
+        })()
       ))}
     </View>
   );
@@ -382,27 +555,7 @@ export function ReviewSummary({
         <Text style={styles.reviewCount}>from {reviewCount} reviews</Text>
       </View>
       <Text style={styles.reviewNote}>{note}</Text>
-      <View style={styles.reviewBars}>
-        <ReviewBar label="Communication" value="4.9" />
-        <ReviewBar label="On-time delivery" value="4.8" />
-      </View>
     </AppCard>
-  );
-}
-
-function ReviewBar({ label, value }: { label: string; value: string }) {
-  const { theme } = useTheme();
-  const styles = makeStyles(theme);
-  return (
-    <View style={styles.reviewBarRow}>
-      <Text style={styles.reviewBarLabel}>{label}</Text>
-      <View style={styles.reviewBarTrack}>
-        <View
-          style={[styles.reviewBarFill, { width: `${Number(value) * 20}%` }]}
-        />
-      </View>
-      <Text style={styles.reviewBarValue}>{value}</Text>
-    </View>
   );
 }
 
@@ -415,6 +568,11 @@ export function LocationFilterSheet({
   subtitle = "Use your saved creator locations",
   searchAccessibilityLabel = "Search locations",
   limitWithoutQuery = 24,
+  single = false,
+  title = "Filter by location",
+  optionIcon = "location-outline",
+  searchPlaceholder = "Search city or state",
+  emptyLabel = "No locations found",
 }: {
   visible: boolean;
   locations: string[];
@@ -424,29 +582,40 @@ export function LocationFilterSheet({
   subtitle?: string;
   searchAccessibilityLabel?: string;
   limitWithoutQuery?: number | null;
+  single?: boolean;
+  title?: string;
+  optionIcon?: AppIconName;
+  searchPlaceholder?: string;
+  emptyLabel?: string;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
+  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState<string[]>(selected);
   const [query, setQuery] = useState("");
-  const uniqueLocations = Array.from(
-    new Set(locations.map((location) => location.trim()).filter(Boolean)),
+  const uniqueLocations = useMemo(
+    () => Array.from(new Set(locations.map((location) => location.trim()).filter(Boolean))),
+    [locations],
   );
-  const matchingLocations = uniqueLocations.filter((location) =>
-    location.toLowerCase().includes(query.trim().toLowerCase()),
+  const normalizedQuery = query.trim().toLowerCase();
+  const matchingLocations = useMemo(
+    () => uniqueLocations.filter((location) => location.toLowerCase().includes(normalizedQuery)),
+    [normalizedQuery, uniqueLocations],
   );
-  const mergedLocations = Array.from(
-    new Set([...draft, ...matchingLocations]),
-  );
-  const options = query.trim() || limitWithoutQuery === null
-    ? mergedLocations
-    : mergedLocations.slice(0, limitWithoutQuery);
+  const options = useMemo(() => {
+    const resultLimit = normalizedQuery ? 60 : limitWithoutQuery;
+    const visibleMatches = resultLimit === null
+      ? matchingLocations
+      : matchingLocations.slice(0, resultLimit);
+    return Array.from(new Set([...draft, ...visibleMatches]));
+  }, [draft, limitWithoutQuery, matchingLocations, normalizedQuery]);
   const toggle = (location: string) =>
-    setDraft((current) =>
-      current.includes(location)
+    setDraft((current) => {
+      if (single) return current.includes(location) ? [] : [location];
+      return current.includes(location)
         ? current.filter((item) => item !== location)
-        : [...current, location],
-    );
+        : [...current, location];
+    });
   return (
     <Modal
       transparent
@@ -460,11 +629,11 @@ export function LocationFilterSheet({
     >
       <View style={styles.locationModalOverlay}>
         <Pressable style={styles.locationModalBackdrop} onPress={onClose} />
-        <View style={styles.locationModal}>
+        <View style={[styles.locationModal, { paddingBottom: Math.max(insets.bottom, theme.spacing.lg) }]}>
           <View style={styles.filterSheetHandle} />
           <View style={styles.locationModalHeader}>
             <View style={styles.flex}>
-              <Text style={styles.sheetTitle}>Filter by location</Text>
+              <Text style={styles.sheetTitle}>{title}</Text>
               <Text style={styles.sheetSubtitle}>{subtitle}</Text>
             </View>
             <Pressable
@@ -490,68 +659,68 @@ export function LocationFilterSheet({
               accessibilityLabel={searchAccessibilityLabel}
               value={query}
               onChangeText={setQuery}
-              placeholder="Search city or state"
-              placeholderTextColor={theme.colors.textSecondary}
+              placeholder={searchPlaceholder}
+              placeholderTextColor={theme.colors.inputPlaceholder}
               style={styles.locationSearchInput}
             />
           </View>
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.locationOptions}
-          >
-            {options.length ? (
-              options.map((location) => {
-                const isSelected = draft.includes(location);
-                return (
-                  <Pressable
-                    key={location}
-                    accessibilityRole="checkbox"
-                    accessibilityState={{ checked: isSelected }}
-                    onPress={() => toggle(location)}
-                    style={({ pressed }) => [
-                      styles.locationOption,
-                      isSelected && styles.locationOptionSelected,
-                      pressed && styles.pressed,
+          <FlatList
+            data={options}
+            keyExtractor={(location) => location}
+            renderItem={({ item: location }) => {
+              const isSelected = draft.includes(location);
+              return (
+                <Pressable
+                  accessibilityRole={single ? "radio" : "checkbox"}
+                  accessibilityState={{ checked: isSelected, selected: isSelected }}
+                  onPress={() => toggle(location)}
+                  style={({ pressed }) => [
+                    styles.locationOption,
+                    isSelected && styles.locationOptionSelected,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.locationOptionIcon,
+                      isSelected && styles.locationOptionIconSelected,
                     ]}
                   >
-                    <View
-                      style={[
-                        styles.locationOptionIcon,
-                        isSelected && styles.locationOptionIconSelected,
-                      ]}
-                    >
-                      <AppIcon
-                        name={isSelected ? "checkmark" : "location-outline"}
-                        size={17}
-                        color={
-                          isSelected
-                            ? theme.colors.primaryText
-                            : theme.colors.primary
-                        }
-                      />
-                    </View>
-                    <Text style={styles.locationOptionText}>{location}</Text>
-                    {isSelected ? (
-                      <AppIcon
-                        name="checkmark-circle"
-                        size={19}
-                        color={theme.colors.primary}
-                      />
-                    ) : null}
-                  </Pressable>
-                );
-              })
-            ) : (
+                    <AppIcon
+                      name={isSelected ? "checkmark" : optionIcon}
+                      size={17}
+                      color={
+                        isSelected
+                          ? theme.colors.primaryText
+                          : theme.colors.primary
+                      }
+                    />
+                  </View>
+                  <Text style={styles.locationOptionText}>{location}</Text>
+                  {isSelected ? (
+                    <AppIcon
+                      name="checkmark-circle"
+                      size={19}
+                      color={theme.colors.primary}
+                    />
+                  ) : null}
+                </Pressable>
+              );
+            }}
+            ListEmptyComponent={
               <View style={styles.mediaEmpty}>
                 <AppIcon
                   name="search-outline"
                   size={18}
                   color={theme.colors.textSecondary}
                 />
-                <Text style={styles.mediaEmptyText}>No locations found</Text>
+                <Text style={styles.mediaEmptyText}>{emptyLabel}</Text>
               </View>
-            )}
-          </ScrollView>
+            }
+            showsVerticalScrollIndicator={false}
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.locationOptions}
+          />
           <View style={styles.locationActions}>
             <Pressable
               accessibilityRole="button"
@@ -567,9 +736,9 @@ export function LocationFilterSheet({
             </Pressable>
             <View style={styles.flex}>
               <AppButton
-                label={`Apply${draft.length ? ` (${draft.length})` : ""}`}
+                label={single ? "Select" : `Apply${draft.length ? ` (${draft.length})` : ""}`}
                 onPress={() => {
-                  onApply(draft);
+                  onApply(single ? draft.slice(0, 1) : draft);
                   onClose();
                 }}
               />
@@ -582,8 +751,23 @@ export function LocationFilterSheet({
 }
 
 const makeStyles = (theme: AppTheme) =>
-  StyleSheet.create({
+  createThemeStyles(theme, {
     flex: { flex: 1, minWidth: 0 },
+    creatorProfileCard: { gap: theme.spacing.md, marginBottom: theme.spacing.sm, backgroundColor: theme.colors.surfaceLilac },
+    creatorProfileHeader: { flexDirection: "row", alignItems: "center", gap: theme.spacing.md },
+    creatorProfileName: { color: theme.colors.textPrimary, fontSize: theme.type.bodyLarge, fontWeight: "800", fontFamily: theme.type.bodyFont },
+    creatorProfileMeta: { color: theme.colors.textSecondary, fontSize: theme.type.caption, lineHeight: theme.type.lineHeight.caption, fontFamily: theme.type.bodyFont },
+    creatorProfileBio: { color: theme.colors.textSecondary, fontSize: theme.type.body, lineHeight: theme.type.lineHeight.body, fontFamily: theme.type.bodyFont },
+    creatorProfileStats: { flexDirection: "row", gap: theme.spacing.sm, paddingVertical: theme.spacing.xs, borderTopWidth: 1, borderBottomWidth: 1, borderColor: theme.colors.border },
+    creatorProfileStat: { flex: 1, minWidth: 0, gap: 2, padding: theme.spacing.sm, borderRadius: theme.radius.control },
+    creatorProfileStatSky: { backgroundColor: theme.colors.surfaceSky },
+    creatorProfileStatMint: { backgroundColor: theme.colors.surfaceMint },
+    creatorProfileStatBlush: { backgroundColor: theme.colors.surfaceBlush },
+    creatorProfileValue: { color: theme.colors.textPrimary, fontSize: theme.type.body, fontWeight: "800", fontFamily: theme.type.bodyFont },
+    creatorProfileLabel: { color: theme.colors.textSecondary, fontSize: theme.type.caption, fontFamily: theme.type.bodyFont },
+    creatorProfileTags: { flexDirection: "row", flexWrap: "wrap", gap: theme.spacing.xs },
+    creatorProfileFooter: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+    creatorProfileAction: { color: theme.colors.primary, fontSize: theme.type.body, fontWeight: "800", fontFamily: theme.type.bodyFont },
     filterSheetHandle: {
       width: 80,
       height: 4,
@@ -607,6 +791,7 @@ const makeStyles = (theme: AppTheme) =>
       gap: theme.spacing.md,
       marginBottom: theme.spacing.sm,
       borderRadius: theme.radius.md,
+      backgroundColor: theme.colors.surfaceSky,
     },
     proposalHeader: {
       flexDirection: "row",
@@ -700,6 +885,50 @@ const makeStyles = (theme: AppTheme) =>
       fontWeight: "700",
       lineHeight: 20,
     },
+    deliverySchedule: {
+      gap: theme.spacing.sm,
+      padding: theme.spacing.sm,
+      borderRadius: theme.radius.sm,
+      backgroundColor: theme.colors.accent,
+    },
+    deliveryScheduleCopy: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.sm,
+    },
+    deliveryScheduleIcon: {
+      width: 32,
+      height: 32,
+      borderRadius: theme.radius.sm,
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: theme.colors.surface,
+    },
+    deliveryScheduleText: { flex: 1, minWidth: 0, gap: 2 },
+    deliveryScheduleValue: {
+      color: theme.colors.textPrimary,
+      fontSize: theme.type.body,
+      fontWeight: "800",
+    },
+    deliveryReminder: {
+      minHeight: 44,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: theme.spacing.xs,
+      paddingLeft: 40,
+    },
+    deliveryReminderAction: {
+      flex: 1,
+      minWidth: 0,
+      paddingRight: theme.spacing.xs,
+      borderRadius: theme.radius.sm,
+    },
+    deliveryReminderText: {
+      color: theme.colors.success,
+      fontSize: theme.type.caption,
+      fontWeight: "700",
+    },
+    deliveryReminderTextMuted: { color: theme.colors.textSecondary },
     proposalMessage: {
       width: "100%",
       color: theme.colors.textSecondary,
@@ -710,14 +939,12 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: theme.colors.surfaceMuted,
     },
     proposalFooter: {
-      gap: theme.spacing.xs,
-      flexDirection: "row",
-      flexWrap: "wrap",
-      alignItems: "flex-start",
-      justifyContent: "space-between",
+      gap: theme.spacing.sm,
+      flexDirection: "column",
+      alignItems: "stretch",
       paddingTop: theme.spacing.xs,
     },
-    proposalFooterStack: { alignItems: "stretch", flexDirection: "column" },
+    proposalFooterStack: { flexDirection: "column" },
     proposalUpdated: {
       flexShrink: 1,
       color: theme.colors.textSecondary,
@@ -726,15 +953,20 @@ const makeStyles = (theme: AppTheme) =>
     proposalActions: {
       flexDirection: "row",
       flexWrap: "wrap",
-      justifyContent: "flex-end",
-      gap: theme.spacing.xs,
-      flex: 1,
-      flexBasis: 200,
+      justifyContent: "flex-start",
+      gap: theme.spacing.sm,
+      width: "100%",
+      flex: 0,
+      flexBasis: "auto",
       minWidth: 0,
-      flexShrink: 1,
     },
-    proposalActionsStack: { alignItems: "stretch", width: "100%", flex: 0 },
-    proposalActionButton: { width: "100%" },
+    proposalActionsStack: {
+      alignItems: "stretch",
+      flexDirection: "column",
+      width: "100%",
+      flex: 0,
+    },
+    proposalActionButton: { width: "100%", flexGrow: 0 },
     completedLabel: { flexDirection: "row", alignItems: "center", gap: 4 },
     completedText: {
       color: theme.colors.success,
@@ -798,13 +1030,14 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: theme.colors.overlay,
     },
     locationModal: {
+      ...theme.shadows.modal,
       height: "76%",
       maxHeight: "82%",
       padding: theme.spacing.md,
       gap: theme.spacing.sm,
       borderTopLeftRadius: theme.radius.lg,
       borderTopRightRadius: theme.radius.lg,
-      backgroundColor: theme.colors.surface,
+      backgroundColor: theme.colors.surfaceRaised,
     },
     locationModalHeader: {
       flexDirection: "row",
@@ -825,6 +1058,8 @@ const makeStyles = (theme: AppTheme) =>
       alignItems: "center",
       gap: theme.spacing.sm,
       paddingHorizontal: theme.spacing.md,
+      borderWidth: 1,
+      borderColor: theme.colors.border,
       borderRadius: theme.radius.md,
       backgroundColor: theme.colors.surfaceMuted,
     },
@@ -832,6 +1067,7 @@ const makeStyles = (theme: AppTheme) =>
       flex: 1,
       color: theme.colors.textPrimary,
       fontSize: theme.type.bodyLarge,
+      fontFamily: theme.type.bodyFont,
     },
     locationOptions: {
       gap: theme.spacing.xs,
@@ -907,9 +1143,19 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.textSecondary,
       fontSize: theme.type.caption,
     },
+    socialStatus: {
+      minWidth: 72,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "flex-end",
+      gap: 4,
+    },
+    socialStatusText: { fontSize: 11, fontWeight: "800" },
+    socialStatusVerified: { color: "#2563EB" },
+    socialStatusReview: { color: theme.colors.warning },
     reviewCard: {
       gap: theme.spacing.sm,
-      backgroundColor: theme.colors.surfaceMuted,
+      backgroundColor: theme.colors.surface,
     },
     reviewScore: {
       flexDirection: "row",
@@ -929,36 +1175,6 @@ const makeStyles = (theme: AppTheme) =>
       color: theme.colors.textSecondary,
       fontSize: theme.type.body,
       lineHeight: 20,
-    },
-    reviewBars: { gap: theme.spacing.xs },
-    reviewBarRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: theme.spacing.xs,
-    },
-    reviewBarLabel: {
-      width: 112,
-      color: theme.colors.textSecondary,
-      fontSize: theme.type.caption,
-    },
-    reviewBarTrack: {
-      flex: 1,
-      height: 6,
-      overflow: "hidden",
-      borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.border,
-    },
-    reviewBarFill: {
-      height: "100%",
-      borderRadius: theme.radius.pill,
-      backgroundColor: theme.colors.primary,
-    },
-    reviewBarValue: {
-      width: 28,
-      color: theme.colors.textPrimary,
-      fontSize: theme.type.caption,
-      fontWeight: "700",
-      textAlign: "right",
     },
     pressed: { opacity: 0.8 },
   });
