@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, ForbiddenException, Get, Inject, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { AuthGuard } from "../../common/auth/auth.guard.js";
 import { CurrentUser } from "../../common/auth/current-user.decorator.js";
 import type { AuthPrincipal } from "../../common/auth/auth.types.js";
@@ -14,7 +14,7 @@ export class ChatController {
   @Get("admin/conversation") adminConversation(@CurrentUser() user: AuthPrincipal) { return this.adminChat.conversationForUser(user); }
   @Post("admin/conversation") openAdminConversation(@CurrentUser() user: AuthPrincipal) { return this.adminChat.openForUser(user); }
   @Get("admin/conversations/:conversationId/messages") adminMessages(@CurrentUser() user: AuthPrincipal, @Param("conversationId") id: string, @Query("before") before?: string) { return this.adminChat.messages(user, id, before); }
-  @Post("admin/conversations/:conversationId/messages") sendAdminMessage(@CurrentUser() user: AuthPrincipal, @Param("conversationId") id: string, @Body() dto: AdminChatMessageDto) { return this.adminChat.send(user, id, dto.text, dto.clientMessageId, dto.attachments); }
+  @Post("admin/conversations/:conversationId/messages") sendAdminMessage(@CurrentUser() user: AuthPrincipal, @Param("conversationId") id: string, @Body() dto: AdminChatMessageDto) { return this.adminChat.send(user, id, dto.text, dto.clientMessageId, dto.attachments, dto.replyToId); }
   @Post("admin/conversations/:conversationId/read") readAdminConversation(@CurrentUser() user: AuthPrincipal, @Param("conversationId") id: string) { return this.adminChat.markRead(user, id); }
   @Post("admin/presence/heartbeat") adminChatHeartbeat(@CurrentUser() user: AuthPrincipal, @Body() body: AdminChatHeartbeatDto) { return this.adminChat.heartbeat(user, body.conversationId); }
 
@@ -67,8 +67,22 @@ export class AdminChatsController {
   constructor(@Inject(AdminChatService) private readonly chat: AdminChatService) {}
   private assertAdmin(user: AuthPrincipal) { if (user.role !== "ADMIN") throw new ForbiddenException("Admin access required"); }
   @Get("users") users(@CurrentUser() user: AuthPrincipal, @Query("search") search?: string, @Query("offset") offset?: string, @Query("take") take?: string) { this.assertAdmin(user); return this.chat.users(search, Number(offset) || 0, Number(take) || 30); }
-  @Get("reports") reports(@CurrentUser() user: AuthPrincipal, @Query("type") type?: string, @Query("before") before?: string, @Query("take") take?: string) { this.assertAdmin(user); return this.chat.reports(type, before, Number(take) || 25); }
+  @Get("reports") reports(@CurrentUser() user: AuthPrincipal, @Query("type") type?: string, @Query("q") query?: string, @Query("take") take?: string, @Query("offset") offset?: string) {
+    this.assertAdmin(user);
+    const parsedTake = take === undefined ? 25 : Number(take);
+    const parsedOffset = offset === undefined ? 0 : Number(offset);
+    if (!Number.isInteger(parsedTake) || parsedTake < 1 || parsedTake > 100) throw new BadRequestException("take must be between 1 and 100");
+    if (!Number.isInteger(parsedOffset) || parsedOffset < 0) throw new BadRequestException("offset must be zero or greater");
+    if (query && query.length > 200) throw new BadRequestException("q must be 200 characters or fewer");
+    return this.chat.reports(type, query, parsedTake, parsedOffset);
+  }
   @Post("users/:userId/conversation") open(@CurrentUser() user: AuthPrincipal, @Param("userId") userId: string) { this.assertAdmin(user); return this.chat.openForAdmin(user, userId); }
+  @Post("users/:userId/notifications") notifyInBrandlyChat(@CurrentUser() user: AuthPrincipal, @Param("userId") userId: string, @Body() dto: AdminChatMessageDto) {
+    this.assertAdmin(user);
+    if (!dto.text?.trim() || !dto.clientMessageId?.startsWith("notification:")) throw new BadRequestException("Invalid Brandly chat notification");
+    const notificationId = dto.clientMessageId.slice("notification:".length);
+    return this.chat.sendNotificationMessage(user, userId, dto.text, notificationId);
+  }
   @Get("conversations/:conversationId/messages") messages(@CurrentUser() user: AuthPrincipal, @Param("conversationId") id: string, @Query("before") before?: string) { this.assertAdmin(user); return this.chat.messages(user, id, before); }
   @Post("conversations/:conversationId/messages") send(@CurrentUser() user: AuthPrincipal, @Param("conversationId") id: string, @Body() dto: AdminChatMessageDto) { this.assertAdmin(user); return this.chat.send(user, id, dto.text, dto.clientMessageId, dto.attachments); }
   @Post("conversations/:conversationId/read") read(@CurrentUser() user: AuthPrincipal, @Param("conversationId") id: string) { this.assertAdmin(user); return this.chat.markRead(user, id); }

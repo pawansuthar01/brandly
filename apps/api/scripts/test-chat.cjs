@@ -71,6 +71,11 @@ async function test(name, fn) { try { await fn(); results.push({ name, pass: tru
     await api.getRemoteChatMessages(id, alias);
     assert.equal(fetches.length, 2); assert.match(fetches[1].url, /limit=30&before=/);
   });
+  await test('Brandly support chat sends reply references in the authenticated request', async () => {
+    fetches = [];
+    await api.sendRemoteAdminChatMessage(id, 'Reply', 'reply-client', undefined, alias);
+    assert.equal(JSON.parse(fetches[0].init.body).replyToId, alias);
+  });
   await test('A burst of read receipts batches into one POST', async () => {
     fetches = []; await Promise.all(Array.from({ length: 20 }, () => api.markRemoteChatRead(id)));
     assert.equal(fetches.length, 1); assert.match(fetches[0].url, /\/read$/);
@@ -84,15 +89,16 @@ async function test(name, fn) { try { await fn(); results.push({ name, pass: tru
     '../notifications/notifications.service.js': { NotificationsService: class {} }, './chat.realtime.js': { ChatRealtimeService: class {} },
   });
   const app = { id, campaignId: alias, status: 'ACCEPTED', creatorId: alias, campaign: { brandId: user.userId, brand: { profile: { displayName: 'Brand' } } }, creator: { profile: { displayName: 'Creator' } } };
-  let records = Array.from({ length: 65 }, (_, i) => ({ id: `${String(i + 1).padStart(8, '0')}-4444-4444-8444-444444444444`, applicationId: id, senderId: user.userId, sender: { role: 'BRAND', profile: { displayName: 'Brand' } }, text: `message-${i}`, createdAt: new Date(Date.UTC(2026, 9, 6, 0, 0, i)), updatedAt: new Date(), attachments: [], readAt: null }));
+  let records = Array.from({ length: 65 }, (_, i) => ({ id: `${String(i + 1).padStart(8, '0')}-4444-4444-8444-444444444444`, applicationId: id, senderId: user.userId, sender: { role: 'BRAND', profile: { displayName: 'Brand' } }, text: `message-${i}`, createdAt: new Date(Date.now() - 60 * 60 * 1000 + i * 1000), updatedAt: new Date(), attachments: [], readAt: null }));
+  records.push(...Array.from({ length: 8 }, (_, i) => ({ id: `${String(i + 100).padStart(8, '0')}-4444-4444-8444-444444444444`, applicationId: id, senderId: user.userId, sender: { role: 'BRAND', profile: { displayName: 'Brand' } }, text: `older-${i}`, createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 + i * 1000), updatedAt: new Date(), attachments: [], readAt: null })));
   const events = [], pushes = [], queries = [];
   let blockRows = [];
   const db = {
     campaignApplication: { findUnique: async () => app, findFirst: async () => app, update: async () => app },
     profileInteraction: { findFirst: async () => null, findMany: async () => blockRows },
     chatMessage: {
-      findFirst: async ({ where }) => records.find((record) => where.id ? record.id === where.id && record.applicationId === where.applicationId : record.clientMessageId === where.clientMessageId && record.applicationId === where.applicationId) ?? null,
-      findMany: async (query) => { queries.push(query); const cursor = query.where.OR?.[0].createdAt.lt; return records.filter((record) => record.applicationId === query.where.applicationId && (!cursor || record.createdAt < cursor)).sort((a, b) => b.createdAt - a.createdAt).slice(0, query.take); },
+      findFirst: async ({ where }) => where.id ? records.find((record) => record.id === where.id && record.applicationId === where.applicationId) ?? null : where.clientMessageId ? records.find((record) => record.clientMessageId === where.clientMessageId && record.applicationId === where.applicationId) ?? null : records.find((record) => record.applicationId === where.applicationId && record.createdAt < where.createdAt.lt) ?? null,
+      findMany: async (query) => { queries.push(query); const cursor = query.where.OR?.[0].createdAt.lt; return records.filter((record) => record.applicationId === query.where.applicationId && (!query.where.createdAt?.gte || record.createdAt >= query.where.createdAt.gte) && (!query.where.createdAt?.lt || record.createdAt < query.where.createdAt.lt) && (!cursor || record.createdAt < cursor)).sort((a, b) => b.createdAt - a.createdAt).slice(0, query.take); },
       findUnique: async ({ where }) => records.find((record) => record.clientMessageId === where.applicationId_senderId_clientMessageId.clientMessageId),
       create: async ({ data }) => {
         if (records.some((record) => record.clientMessageId === data.clientMessageId)) throw new (require('@prisma/client').Prisma.PrismaClientKnownRequestError)('Duplicate', { code: 'P2002', clientVersion: 'test' });
@@ -104,14 +110,17 @@ async function test(name, fn) { try { await fn(); results.push({ name, pass: tru
   db.$transaction = async (fn) => fn(db);
   const redis = { getClient: () => ({ get: async () => { throw new Error('Redis disconnected'); } }), connect: async () => true };
   const service = new serviceModule.ChatService(db, { create: async (recipient, input) => { pushes.push({ recipient, input }); } }, redis, { send: (recipient, event) => events.push({ recipient, event }) });
-  await test('Latest 30 then older pages resolve shared chat ID and keep chronological order', async () => {
+  await test('Chat starts with the last 48 hours, then pages into older history without mixing windows', async () => {
     const latest = await service.getMessages(user, alias);
     assert.equal(queries[0].where.applicationId, id); assert.equal(queries[0].take, 31);
     assert.equal(latest.messages.length, 30); assert.equal(latest.messages[0].text, 'message-35'); assert.equal(latest.messages.at(-1).text, 'message-64'); assert.equal(latest.hasMore, true);
     const older = await service.getMessages(user, alias, 30, latest.nextCursor);
     assert.equal(older.messages[0].text, 'message-5'); assert.equal(older.messages.at(-1).text, 'message-34');
-    const oldest = await service.getMessages(user, alias, 30, older.nextCursor);
-    assert.equal(oldest.messages.length, 5); assert.equal(oldest.hasMore, false);
+    const boundary = await service.getMessages(user, alias, 30, older.nextCursor);
+    assert.equal(boundary.messages.length, 5); assert.equal(boundary.messages[0].text, 'message-0'); assert.equal(boundary.hasMore, true); assert.equal(boundary.nextCursor, 'older');
+    const oldest = await service.getMessages(user, alias, 30, boundary.nextCursor);
+    assert.equal(oldest.messages.length, 8); assert.equal(oldest.messages[0].text, 'older-0'); assert.equal(oldest.hasMore, false);
+    assert.ok(queries[0].where.createdAt.gte instanceof Date); assert.ok(queries.at(-1).where.createdAt.lt instanceof Date);
     await assert.rejects(service.getMessages(user, alias, 30, '------------------------------------'), /Invalid message cursor/);
   });
   await test('A block immediately disables the accepted chat for both delivery and send', async () => {
@@ -132,7 +141,7 @@ async function test(name, fn) { try { await fn(); results.push({ name, pass: tru
     await service.assertCardReferences({ userId: alias, role: 'CREATOR' }, app, { taskId: id });
     await assert.rejects(service.assertCardReferences({ userId: '55555555-5555-4555-8555-555555555555', role: 'ADMIN' }, app, { taskId: id }), /Share the task only after the collaboration is accepted/);
   });
-  await test('Concurrent send retries persist once; Redis outage does not fail save; push targets the chat', async () => {
+  await test('Concurrent send retries persist once; Redis outage does not fail save; chat notification is push-only', async () => {
     records = []; const sent = await Promise.all([service.createMessage(user, alias, { text: 'Real message', clientMessageId: 'same' }), service.createMessage(user, alias, { text: 'Real message', clientMessageId: 'same' })]);
     assert.equal(records.length, 1); assert.equal(records[0].applicationId, id); assert.equal(sent[0].id, sent[1].id);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -202,9 +211,10 @@ async function test(name, fn) { try { await fn(); results.push({ name, pass: tru
       '../../common/database/prisma.service.js': { PrismaService: class {} }, '../notifications/notifications.service.js': { NotificationsService: class {} }, '../chat/chat.realtime.js': { ChatRealtimeService: class {} },
     });
     const creator = { userId: alias, role: 'CREATOR' };
-    const campaign = { id, brandId: user.userId, title: 'Open offer', status: 'PUBLISHED', visibility: 'PUBLIC', deadlineAt: null, applications: [], applicationLimit: null, approvalLimit: null, closeOnApplicationLimit: true, closeOnApprovalLimit: true };
+    const campaign = { id, brandId: user.userId, title: 'Open offer', status: 'PUBLISHED', visibility: 'PUBLIC', deadlineAt: null, minimumFollowers: null, applications: [], applicationLimit: null, approvalLimit: null, closeOnApplicationLimit: true, closeOnApprovalLimit: true };
     const application = { id: alias, creatorId: alias, message: 'I would like to apply', history: [], creator: { profile: { displayName: 'Creator' } } };
     const service = new CampaignsService({
+      user: { findUnique: async () => ({ id: alias, profile: null, socialAccounts: [] }) },
       $transaction: async (callback) => callback({
         $queryRaw: async () => {},
         campaign: { findUnique: async () => campaign },
@@ -230,14 +240,16 @@ async function test(name, fn) { try { await fn(); results.push({ name, pass: tru
     const thread = { id, userId: alias, user: { id: alias, role: 'CREATOR', email: 'creator@example.test', profile: { displayName: 'Creator', avatarUrl: null } } };
     const savedAt = new Date('2026-10-11T00:00:00.000Z'), events = [], pushes = [], writes = [];
     const created = { id: message.id, conversationId: id, senderId: alias, senderRole: 'ADMIN', clientMessageId: 'admin:admin-client', text: 'Hello from support', createdAt: savedAt, readAt: null, sender: { id: alias, role: 'ADMIN', profile: null } };
+    const reportQueries = [];
     const db = {
       user: { findFirst: async () => ({ id: alias }), findMany: async () => [{ id: user.userId }] },
       adminChatConversation: { findUnique: async () => thread, upsert: async () => thread, update: async () => thread },
       adminChatMessage: {
         findUnique: async () => null,
-        findFirst: async () => null,
-        findMany: async () => [{ ...created, text: '[Bug report] Upload failed', attachments: [{ id: 'proof', name: 'screen.png', type: 'image', uri: 'https://media.example/screen.png' }], conversation: thread }],
-        create: async ({ data }) => { writes.push(data); return { ...created, ...data, sender: { id: data.senderId, role: data.senderRole, profile: { displayName: 'Creator' } } }; },
+        findFirst: async ({ where }) => where?.id === alias && where?.conversationId === id ? { id: alias } : null,
+        findMany: async (args) => { if (args.where?.AND) reportQueries.push(args); return [{ ...created, text: '[Bug report] Upload failed', attachments: [{ id: 'proof', name: 'screen.png', type: 'image', uri: 'https://media.example/screen.png' }], conversation: thread }]; },
+        count: async () => 1,
+        create: async ({ data }) => { writes.push(data); return { ...created, ...data, replyTo: data.replyToId ? { id: alias, text: 'Original message', attachments: [], senderRole: 'CREATOR', sender: { profile: { displayName: 'Creator' } } } : null, sender: { id: data.senderId, role: data.senderRole, profile: { displayName: 'Creator' } } }; },
         updateMany: async ({ where }) => { writes.push({ readWhere: where }); return { count: 0 }; },
       },
       $transaction: async (work) => work(db),
@@ -257,13 +269,32 @@ async function test(name, fn) { try { await fn(); results.push({ name, pass: tru
     assert.equal(sent.senderName, 'Brandly'); assert.equal(sent.mine, true);
     assert.equal(writes[0].senderId, alias); assert.equal(writes[0].clientMessageId, 'admin:admin-client');
     assert.ok(events.some((item) => item.recipient === alias && item.event.channel === 'ADMIN_CHAT'));
-    assert.equal(pushes[0].input.data.adminChat, 'true');
+    const reply = await service.send(creator, id, 'A reply', 'reply-client', undefined, alias);
+    assert.equal(writes.at(-1).replyToId, alias); assert.equal(reply.replyToId, alias); assert.equal(reply.replyTo.author, 'You'); assert.equal(reply.replyTo.text, 'Original message');
+    await assert.rejects(service.send(creator, id, 'Invalid reply', 'invalid-reply', undefined, user.userId), /not part of this chat/i);
+    assert.equal(pushes[0].input.data.adminChat, 'true'); assert.equal(pushes[0].input.channels.join(), 'PUSH');
+    const pushCount = pushes.length;
+    const notice = await service.sendNotificationMessage(admin, alias, '🔔 Account update\n\nYour social profile was reviewed.', message.id);
+    assert.equal(notice.senderName, 'Brandly'); assert.equal(notice.mine, true);
+    assert.equal(writes.at(-1).text, '🔔 Account update\n\nYour social profile was reviewed.');
+    assert.equal(writes.at(-1).clientMessageId, `admin:notification:${message.id}`);
+    assert.equal(pushes.length, pushCount + 1, 'an in-chat notice sends a push notification');
+    assert.equal(pushes.at(-1).input.channels.join(), 'PUSH');
+    await assert.rejects(service.sendNotificationMessage(creator, alias, 'Notice', message.id), /admin/i);
+    const reviewCard = await service.sendSocialReviewCard(creator, { requestId: message.id, accountId: id, platform: 'Instagram', handle: '@creator', contentType: 'post', contentUrl: 'https://social.example/post/1' });
+    assert.equal(reviewCard.attachments[0].type, 'social-review');
+    assert.equal(reviewCard.attachments[0].handle, '@creator');
+    assert.equal(reviewCard.attachments[0].contentUrl, 'https://social.example/post/1');
+    await assert.rejects(service.send(creator, id, 'forged card', 'forged-social-card', [{ id: 'x', name: 'x', type: 'social-review', accountId: id, platform: 'Instagram', handle: '@creator', contentType: 'post', contentUrl: 'https://social.example/post/1' }]), /Invalid social account review card/i);
     const sentByCreator = await service.send(creator, id, 'Hello Brandly', 'creator-client');
     assert.equal(sentByCreator.mine, true);
     assert.ok(events.some((item) => item.recipient === 'admin:owner@example.test' && item.event.message?.mine === false));
-    const reports = await service.reports('BUG_REPORT');
+    const reports = await service.reports('BUG_REPORT', 'upload', 10, 20);
     assert.equal(reports.items[0].type, 'BUG_REPORT'); assert.equal(reports.items[0].userId, alias);
     assert.equal(reports.items[0].message, 'Upload failed'); assert.equal(reports.items[0].attachments[0].uri, attachment.uri);
+    assert.deepEqual({ total: reports.total, take: reports.take, offset: reports.offset }, { total: 1, take: 10, offset: 20 });
+    assert.equal(reportQueries[0].skip, 20); assert.equal(reportQueries[0].take, 10);
+    assert.equal(reportQueries[0].where.AND[1].OR[0].text.contains, 'upload');
     await assert.rejects(service.send(creator, id, '', 'invalid-attachment', [{ ...attachment, uri: 'file:///unsafe.png' }]), /uploaded file URL/i);
     await service.markRead(admin, id);
     assert.equal(writes.at(-1).readWhere.senderRole.not, 'ADMIN');

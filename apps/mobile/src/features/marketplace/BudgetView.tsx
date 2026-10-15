@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { NativeScrollEvent, NativeSyntheticEvent, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Modal, NativeScrollEvent, NativeSyntheticEvent, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { AppButton, AppCard, AppIcon, FilterChip, Pill, SectionTitle } from "../../components/ui";
 import { useTheme } from "../../providers/ThemeProvider";
 import { AppTheme } from "../../styles/theme";
@@ -42,6 +42,9 @@ export function BudgetView({
   const { theme } = useTheme();
   const styles = makeStyles(theme);
   const [filter, setFilter] = useState<PaymentFilter>("All");
+  const [campaignFilter, setCampaignFilter] = useState("All");
+  const [campaignPickerOpen, setCampaignPickerOpen] = useState(false);
+  const [campaignSearch, setCampaignSearch] = useState("");
   const brandCampaigns = useMemo(
     () => campaigns.filter((campaign) => !currentBrandId || campaign.brandId === currentBrandId),
     [campaigns, currentBrandId],
@@ -55,6 +58,12 @@ export function BudgetView({
     () => applications.filter((application) => application.status === "Accepted" && campaignIds.has(application.campaignId ?? application.briefId)),
     [applications, campaignIds],
   );
+  const selectedCampaign = brandCampaigns.find((campaign) => campaign.id === campaignFilter);
+  const activeCampaignFilter = selectedCampaign?.id ?? "All";
+  const campaignOptions = useMemo(() => {
+    const search = campaignSearch.trim().toLowerCase();
+    return brandCampaigns.filter((campaign) => !search || `${campaign.title} ${campaign.category}`.toLowerCase().includes(search));
+  }, [brandCampaigns, campaignSearch]);
   const totalBudget = useMemo(
     () => brandCampaigns.filter((campaign) => campaign.status !== "Archived").reduce((total, campaign) => total + parseCampaignBudgetValue(campaign.budget), 0),
     [brandCampaigns],
@@ -68,8 +77,15 @@ export function BudgetView({
     [paymentApplications, relevantProposals],
   );
   const pending = Math.max(0, committed - paid);
-  const visiblePayments = relevantProposals.filter((proposal) => filter === "All" || (filter === "Paid" ? isPaidStatus(proposal.status) : isCommittedStatus(proposal.status) && !isPaidStatus(proposal.status)));
-  const visibleApplications = paymentApplications.filter((application) => filter === "All" || (filter === "Paid" ? Boolean(application.payment?.paidAt) : !application.payment?.paidAt));
+  const visiblePayments = relevantProposals.filter((proposal) =>
+    (activeCampaignFilter === "All" || proposal.campaignId === activeCampaignFilter) &&
+    (filter === "All" || (filter === "Paid" ? isPaidStatus(proposal.status) : isCommittedStatus(proposal.status) && !isPaidStatus(proposal.status))),
+  );
+  const visibleApplications = paymentApplications.filter((application) =>
+    (activeCampaignFilter === "All" || (application.campaignId ?? application.briefId) === activeCampaignFilter) &&
+    (filter === "All" || (filter === "Paid" ? Boolean(application.payment?.paidAt) : !application.payment?.paidAt)),
+  );
+  const visibleCampaigns = activeCampaignFilter === "All" ? brandCampaigns : brandCampaigns.filter((campaign) => campaign.id === activeCampaignFilter);
   const summaryCards = [
     { label: "Total budget", value: totalBudget, icon: "wallet-outline" as const },
     { label: "Committed", value: committed, icon: "briefcase-outline" as const },
@@ -98,6 +114,10 @@ export function BudgetView({
         ))}
       </View>
       <SectionTitle title="Creator payments" />
+      {brandCampaigns.length > 1 || activeCampaignFilter !== "All" ? <View style={styles.campaignFilterRow}>
+        <View style={styles.flex}><Text style={styles.detailLabel}>Campaign</Text><Text numberOfLines={1} style={styles.cardMeta}>{selectedCampaign?.title ?? "All campaigns"}</Text></View>
+        <Pressable accessibilityRole="button" accessibilityLabel="Filter payments by campaign" onPress={() => setCampaignPickerOpen(true)} style={styles.campaignFilterButton}><AppIcon name="filter-outline" size={17} color={theme.colors.primary} /><Text numberOfLines={1} style={styles.campaignFilterButtonText}>Choose</Text><AppIcon name="chevron-down" size={15} color={theme.colors.textSecondary} /></Pressable>
+      </View> : null}
       <View style={styles.filters}>
         {(["All", "Paid", "Pending"] as PaymentFilter[]).map((item) => <FilterChip key={item} label={item} selected={filter === item} onPress={() => setFilter(item)} />)}
       </View>
@@ -106,12 +126,12 @@ export function BudgetView({
       {!visiblePayments.length && !visibleApplications.length ? (
         <AppCard style={styles.emptyCard}>
           <AppIcon name="wallet-outline" size={24} color={theme.colors.primary} />
-          <Text style={styles.emptyTitle}>No payment records yet</Text>
-          <Text style={styles.emptyText}>Accepted creator work appears here. Enter the agreed INR amount and mark it paid after the transfer is complete.</Text>
+          <Text style={styles.emptyTitle}>{activeCampaignFilter === "All" ? "No payment records yet" : "No payments for this campaign"}</Text>
+          <Text style={styles.emptyText}>Accepted creator work appears here. Enter the agreed INR amount, then mark it paid after the transfer is complete.</Text>
         </AppCard>
       ) : null}
       <SectionTitle title="Campaign commitments" />
-      {brandCampaigns.length ? brandCampaigns.map((campaign, index) => (
+      {visibleCampaigns.length ? visibleCampaigns.map((campaign, index) => (
         <AppCard key={campaign.id} style={[styles.campaignCard, [styles.campaignCardSky, styles.campaignCardMint, styles.campaignCardBlush][index % 3]]}>
           <View style={styles.row}>
             <View style={styles.flex}>
@@ -131,6 +151,17 @@ export function BudgetView({
         <Text style={styles.emptyTitle}>No campaign budgets yet</Text>
         <Text style={styles.emptyText}>Create a campaign to start tracking its budget here.</Text>
       </AppCard>}
+      <Modal visible={campaignPickerOpen} transparent animationType="slide" onRequestClose={() => setCampaignPickerOpen(false)}>
+        <View style={styles.modalBackdrop}><View style={styles.campaignPicker}>
+          <View style={styles.pickerHeader}><View style={styles.flex}><Text style={styles.pickerTitle}>Choose campaign</Text><Text style={styles.cardMeta}>Filter payments and commitments</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Close campaign filter" onPress={() => setCampaignPickerOpen(false)} style={styles.pickerClose}><AppIcon name="close" size={20} color={theme.colors.textSecondary} /></Pressable></View>
+          <View style={styles.campaignSearch}><AppIcon name="search-outline" size={17} color={theme.colors.textSecondary} /><TextInput value={campaignSearch} onChangeText={setCampaignSearch} placeholder="Search campaigns" placeholderTextColor={theme.colors.inputPlaceholder} style={styles.campaignSearchInput} accessibilityLabel="Search campaigns" /></View>
+          <ScrollView style={styles.campaignOptionList} keyboardShouldPersistTaps="handled">
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: campaignFilter === "All" }} onPress={() => { setCampaignFilter("All"); setCampaignPickerOpen(false); }} style={[styles.campaignOption, campaignFilter === "All" && styles.campaignOptionSelected]}><View style={styles.flex}><Text style={styles.cardTitle}>All campaigns</Text><Text style={styles.cardMeta}>{brandCampaigns.length} campaigns</Text></View>{campaignFilter === "All" ? <AppIcon name="checkmark-circle" size={20} color={theme.colors.primary} /> : null}</Pressable>
+            {campaignOptions.map((campaign) => <Pressable key={campaign.id} accessibilityRole="button" accessibilityState={{ selected: campaignFilter === campaign.id }} onPress={() => { setCampaignFilter(campaign.id); setCampaignPickerOpen(false); }} style={[styles.campaignOption, campaignFilter === campaign.id && styles.campaignOptionSelected]}><View style={styles.flex}><Text numberOfLines={1} style={styles.cardTitle}>{campaign.title}</Text><Text style={styles.cardMeta}>{campaign.category} · {campaign.status}</Text></View>{campaignFilter === campaign.id ? <AppIcon name="checkmark-circle" size={20} color={theme.colors.primary} /> : null}</Pressable>)}
+            {!campaignOptions.length ? <Text style={styles.emptyText}>No campaigns match this search.</Text> : null}
+          </ScrollView>
+        </View></View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -198,6 +229,19 @@ const makeStyles = (theme: AppTheme) => createThemeStyles(theme, {
   summaryLabel: { color: theme.colors.textSecondary, fontSize: theme.type.caption, fontFamily: theme.type.bodyFont, textAlign: "center" },
   summaryValue: { color: theme.colors.textPrimary, fontSize: theme.type.title, lineHeight: theme.type.lineHeight.title, fontWeight: "900", fontFamily: theme.type.bodyFont, textAlign: "center", maxWidth: "100%" },
   filters: { flexDirection: "row", flexWrap: "wrap", gap: theme.spacing.sm },
+  campaignFilterRow: { minHeight: 64, flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.sm, borderWidth: 1, borderColor: theme.colors.cardBorder, borderRadius: theme.radius.md, backgroundColor: theme.colors.surface },
+  campaignFilterButton: { maxWidth: "48%", minHeight: 40, flexDirection: "row", alignItems: "center", gap: theme.spacing.xs, paddingHorizontal: theme.spacing.sm, borderWidth: 1, borderColor: theme.colors.cardBorder, borderRadius: theme.radius.control, backgroundColor: theme.colors.surfaceRaised },
+  campaignFilterButtonText: { flexShrink: 1, color: theme.colors.primary, fontSize: theme.type.caption, fontWeight: "800", fontFamily: theme.type.bodyFont },
+  modalBackdrop: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(25, 21, 45, 0.42)" },
+  campaignPicker: { maxHeight: "82%", gap: theme.spacing.sm, padding: theme.spacing.lg, paddingBottom: theme.spacing.xl, borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg, backgroundColor: theme.colors.surface },
+  pickerHeader: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm },
+  pickerTitle: { color: theme.colors.textPrimary, fontSize: theme.type.title, fontWeight: "900", fontFamily: theme.type.bodyFont },
+  pickerClose: { width: 40, height: 40, alignItems: "center", justifyContent: "center", borderRadius: theme.radius.pill, backgroundColor: theme.colors.surfaceMuted },
+  campaignSearch: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, paddingHorizontal: theme.spacing.md, borderWidth: 1, borderColor: theme.colors.cardBorder, borderRadius: theme.radius.control, backgroundColor: theme.colors.surfaceRaised },
+  campaignSearchInput: { flex: 1, minWidth: 0, color: theme.colors.textPrimary, fontSize: theme.type.body, fontFamily: theme.type.bodyFont },
+  campaignOptionList: { flexGrow: 0 },
+  campaignOption: { minHeight: 60, flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, paddingHorizontal: theme.spacing.sm, paddingVertical: theme.spacing.xs, borderBottomWidth: 1, borderBottomColor: theme.colors.cardBorder },
+  campaignOptionSelected: { backgroundColor: theme.colors.surfaceLilac },
   paymentCard: { gap: theme.spacing.sm, backgroundColor: theme.colors.surfaceMint },
   paymentCardActions: { alignItems: "center", gap: theme.spacing.xs },
   campaignCard: { gap: theme.spacing.sm },

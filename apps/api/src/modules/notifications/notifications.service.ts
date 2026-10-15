@@ -4,14 +4,16 @@ import { PrismaService } from "../../common/database/prisma.service.js";
 import { WhatsAppOtpService } from "../../common/auth/whatsapp-otp.service.js";
 import { SmtpOtpService } from "../../common/auth/smtp-otp.service.js";
 import type { RegisterDeviceDto } from "./notifications.dto.js";
-import type { AdminNotificationDto } from "./notifications.dto.js";
+import type { AdminNotificationDto, AdminNotificationLogsQueryDto } from "./notifications.dto.js";
+import type { NotificationPreferencesDto } from "./notifications.dto.js";
+import { formatBrandlyWhatsApp } from "../../common/notification-templates.js";
 
 type NotificationInput = {
   type: string;
   title: string;
   body: string;
   data?: Record<string, string>;
-  channels?: ("PUSH" | "WHATSAPP" | "EMAIL")[];
+  channels?: ("IN_APP" | "PUSH" | "WHATSAPP" | "EMAIL")[];
   sound?: string | null;
   channelId?: string;
   categoryIdentifier?: string;
@@ -36,6 +38,21 @@ type ExpoReceipt = {
 };
 
 type TicketToken = { ticketId: string; token: string };
+
+export const DEFAULT_NOTIFICATION_PREFERENCES = {
+  messages: true,
+  profileActivity: true,
+  proposalUpdates: true,
+  taskUpdates: true,
+} as const;
+
+export function notificationPreferenceForType(type: string): keyof typeof DEFAULT_NOTIFICATION_PREFERENCES | null {
+  if (type === "CHAT_MESSAGE") return "messages";
+  if (type === "CAMPAIGN_UPDATE") return "proposalUpdates";
+  if (type === "SOCIAL_VERIFICATION" || type === "NEW_ACCOUNT" || type.startsWith("ADMIN_")) return "profileActivity";
+  if (type === "TASK_UPDATED") return "taskUpdates";
+  return null;
+}
 
 @Injectable()
 export class NotificationsService {
@@ -71,20 +88,60 @@ export class NotificationsService {
 
   async list(userId: string) {
     return this.prisma.notification.findMany({
-      where: { userId },
+      where: { userId, NOT: { type: "CHAT_MESSAGE", channel: "PUSH" } },
       orderBy: { createdAt: "desc" },
       take: 50,
     });
   }
 
-  async adminLogs() {
-    const records = await this.prisma.notification.findMany({
-      include: { user: { select: { id: true, email: true, profile: { select: { displayName: true } } } } },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-    });
-    return records.map((item) => {
+  async getPreferences(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { notificationPreferences: true } });
+    const saved = user?.notificationPreferences;
+    if (!saved || typeof saved !== "object" || Array.isArray(saved)) return { ...DEFAULT_NOTIFICATION_PREFERENCES };
+    return Object.fromEntries(Object.keys(DEFAULT_NOTIFICATION_PREFERENCES).map((key) => [
+      key,
+      typeof (saved as Record<string, unknown>)[key] === "boolean"
+        ? (saved as Record<string, boolean>)[key]
+        : DEFAULT_NOTIFICATION_PREFERENCES[key as keyof typeof DEFAULT_NOTIFICATION_PREFERENCES],
+    ])) as typeof DEFAULT_NOTIFICATION_PREFERENCES;
+  }
+
+  async savePreferences(userId: string, preferences: NotificationPreferencesDto) {
+    const saved = { messages: preferences.messages, profileActivity: preferences.profileActivity, proposalUpdates: preferences.proposalUpdates, taskUpdates: preferences.taskUpdates };
+    await this.prisma.user.update({ where: { id: userId }, data: { notificationPreferences: saved } });
+    return saved;
+  }
+
+  async adminLogs(query: AdminNotificationLogsQueryDto = {}) {
+    const take = Math.min(100, Math.max(1, Number.parseInt(query.take ?? "25", 10) || 25));
+    const offset = Math.max(0, Number.parseInt(query.offset ?? "0", 10) || 0);
+    const search = query.search?.trim();
+    const filters: Prisma.NotificationWhereInput[] = [];
+    if (query.type && query.type !== "All") filters.push({ type: query.type });
+    if (query.channel) filters.push({ channel: query.channel });
+    if (query.source === "Admin") filters.push({ type: { startsWith: "ADMIN_" } });
+    if (query.source === "App") filters.push({ NOT: { type: { startsWith: "ADMIN_" } } });
+    if (search) filters.push({ OR: [
+      { title: { contains: search, mode: "insensitive" } },
+      { body: { contains: search, mode: "insensitive" } },
+      { user: { is: { email: { contains: search, mode: "insensitive" } } } },
+      { user: { is: { profile: { is: { displayName: { contains: search, mode: "insensitive" } } } } } },
+    ] });
+    const where: Prisma.NotificationWhereInput = filters.length ? { AND: filters } : {};
+    const [records, total, typeRows] = await Promise.all([
+      this.prisma.notification.findMany({
+        where,
+        include: { user: { select: { id: true, email: true, profile: { select: { displayName: true } } } } },
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take,
+      }),
+      this.prisma.notification.count({ where }),
+      this.prisma.notification.findMany({ distinct: ["type"], select: { type: true }, orderBy: { type: "asc" } }),
+    ]);
+    const items = records.map((item) => {
       const data = item.data && typeof item.data === "object" && !Array.isArray(item.data) ? item.data as Record<string, unknown> : {};
+      const mediaType = data.mediaType === "image" || data.mediaType === "video" || data.mediaType === "file" ? data.mediaType : undefined;
       return ({
       id: item.id,
       userId: item.userId,
@@ -93,7 +150,7 @@ export class NotificationsService {
       message: item.body,
       type: item.type,
       source: item.type.startsWith("ADMIN_") ? "Admin" : "App",
-      channel: item.channel === "PUSH" ? "Push" : item.channel === "EMAIL" ? "Email" : "WhatsApp",
+      channel: item.channel === "IN_APP" ? "In-app" : item.channel === "PUSH" ? "Push" : item.channel === "EMAIL" ? "Email" : "WhatsApp",
       sentBy: item.type.startsWith("ADMIN_") ? "Admin" : "Brandly",
       createdAt: item.createdAt.toISOString(),
       read: item.readAt !== null,
@@ -101,9 +158,14 @@ export class NotificationsService {
       deliveredAt: item.deliveredAt?.toISOString() ?? null,
       lastDeliveryError: item.lastDeliveryError,
       actionLabel: typeof data.actionLabel === "string" ? data.actionLabel : undefined,
-      actionUrl: typeof data.actionUrl === "string" ? data.actionUrl : undefined,
+      actionUrl: typeof data.actionUrl === "string" && /^https:\/\//i.test(data.actionUrl) ? data.actionUrl : undefined,
+      adminChat: data.adminChat === true || data.adminChat === "true",
+      mediaUri: typeof data.mediaUri === "string" ? data.mediaUri : undefined,
+      mediaName: typeof data.mediaName === "string" ? data.mediaName : undefined,
+      mediaType,
     });
     });
+    return { items, total, take, offset, types: typeRows.map(({ type }) => type) };
   }
 
   async sendBulk(dto: AdminNotificationDto) {
@@ -114,13 +176,16 @@ export class NotificationsService {
     });
     if (recipients.length !== dto.userIds.length) throw new BadRequestException("One or more recipients are missing or inactive; no notifications were sent");
     const results = await Promise.allSettled(recipients.map(({ id }) => this.create(id, {
-      type: "ADMIN_ANNOUNCEMENT",
+      type: dto.type,
       title: dto.title.trim(),
       body: dto.body.trim(),
-      data: dto.data,
+      data: { ...dto.data, brandName: "Brandly" },
       channels: dto.channels,
     })));
     const persisted = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+    const completedRecipients = results.flatMap((result, index) => result.status === "fulfilled" && result.value[0]
+      ? [{ userId: recipients[index].id, notificationId: result.value[0].id }]
+      : []);
     const delivery = {
       delivered: persisted.filter((item) => item.deliveredAt !== null || item.deliveryStatus === "DELIVERED").length,
       accepted: persisted.filter((item) => item.deliveredAt === null && item.deliveryStatus === "ACCEPTED").length,
@@ -131,6 +196,7 @@ export class NotificationsService {
       requested: recipients.length,
       completed: results.filter((item) => item.status === "fulfilled").length,
       failed: results.filter((item) => item.status === "rejected").length,
+      completedRecipients,
       delivery,
     };
   }
@@ -145,6 +211,13 @@ export class NotificationsService {
   }
 
   async create(userId: string, input: NotificationInput) {
+    const preference = notificationPreferenceForType(input.type);
+    if (preference && !(await this.getPreferences(userId))[preference]) {
+      const allowedChannels = (input.channels?.length ? input.channels : ["PUSH" as const]).filter((channel) => channel !== "PUSH" && channel !== "IN_APP");
+      if (!allowedChannels.length) return [];
+      input = { ...input, channels: allowedChannels };
+    }
+    input = this.withChatMediaDescription({ ...input, data: { type: input.type, ...input.data } });
     if (input.type.startsWith("TASK_REMINDER")) {
       return [await this.createNotificationRecord(userId, "PUSH", { ...input, preferLocalDelivery: true })];
     }
@@ -172,7 +245,10 @@ export class NotificationsService {
       if (emailNotification && !emailNotification.deliveredAt) {
         if (!user?.email) await this.markDeliveryFailed(emailNotification.id, "Recipient has no email address");
         else try {
-          await this.smtp.sendNotification(user.email, emailNotification.title, emailNotification.body, `notification-${emailNotification.id}`);
+          await this.smtp.sendNotification(user.email, emailNotification.title, emailNotification.body, `notification-${emailNotification.id}`, {
+            actionLabel: input.data?.actionLabel,
+            actionUrl: input.data?.actionUrl,
+          });
           await this.prisma.notification.update({ where: { id: emailNotification.id }, data: { deliveredAt: new Date(), deliveryStatus: "DELIVERED", lastDeliveryError: null } });
         } catch (error) {
           await this.markDeliveryFailed(emailNotification.id, error instanceof Error ? error.message : "Email delivery failed");
@@ -183,7 +259,12 @@ export class NotificationsService {
         else try {
             await this.whatsapp.sendMessage(
               user.phoneE164,
-              `${whatsappNotification.title}\n\n${whatsappNotification.body}`,
+              formatBrandlyWhatsApp({
+                title: whatsappNotification.title,
+                body: whatsappNotification.body,
+                actionLabel: input.data?.actionLabel,
+                actionUrl: input.data?.actionUrl,
+              }),
               `notification-${whatsappNotification.id}`,
               user.profile?.displayName,
             );
@@ -264,13 +345,14 @@ export class NotificationsService {
     }
   }
 
-  private async createNotificationRecord(userId: string, channel: "PUSH" | "WHATSAPP" | "EMAIL", input: NotificationInput) {
+  private async createNotificationRecord(userId: string, channel: "IN_APP" | "PUSH" | "WHATSAPP" | "EMAIL", input: NotificationInput) {
     const dedupeKey = input.dedupeKey ? `${input.dedupeKey}:${channel}` : undefined;
     if (dedupeKey) {
       const existing = await this.prisma.notification.findUnique({ where: { dedupeKey } });
       if (existing) return existing;
     }
     try {
+      const now = channel === "IN_APP" ? new Date() : undefined;
       return await this.prisma.notification.create({
         data: {
           userId,
@@ -284,6 +366,7 @@ export class NotificationsService {
           channelId: input.channelId,
           categoryIdentifier: input.categoryIdentifier,
           preferLocalDelivery: input.preferLocalDelivery === true,
+          ...(now ? { provider: "IN_APP", deliveryStatus: "DELIVERED", acceptedAt: now, deliveredAt: now } : {}),
         },
       });
     } catch (error) {
@@ -347,6 +430,9 @@ export class NotificationsService {
           title,
           body,
           data,
+          ...(platform === "android" && data?.mediaType === "image" && /^https:\/\//i.test(data.mediaUri ?? "")
+            ? { richContent: { image: data.mediaUri } }
+            : {}),
           ...(sound !== null ? {
             sound: sound
               ? platform === "android" ? sound : sound.replace(/_alarm\.wav$/i, ".wav")
@@ -412,6 +498,18 @@ export class NotificationsService {
       if (requireDelivery) throw error;
       // Notifications are persisted even when the external push gateway is unavailable.
     }
+  }
+
+  private withChatMediaDescription(input: NotificationInput): NotificationInput {
+    if (input.type !== "CHAT_MESSAGE" || !input.data) return input;
+    const { mediaType, mediaName } = input.data;
+    if (mediaType !== "image" && mediaType !== "video" && mediaType !== "file") return input;
+    const icon = mediaType === "image" ? "📷" : mediaType === "video" ? "🎥" : "📎";
+    const label = mediaName?.trim() || (mediaType === "image" ? "Photo" : mediaType === "video" ? "Video" : "File");
+    const body = /^\d+ attachments?$|^sent an attachment$/i.test(input.body.trim())
+      ? `${icon} ${label}`
+      : `${input.body.trim()} · ${icon} ${label}`;
+    return { ...input, body: body.slice(0, 240) };
   }
 
   async processPushReceipts(now = new Date()): Promise<number> {

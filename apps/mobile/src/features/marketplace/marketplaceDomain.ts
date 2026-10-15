@@ -102,11 +102,16 @@ export type AppNotification = {
     | "alarm-outline";
   title: string;
   body: string;
+  brandName?: string;
+  actionLabel?: string;
+  actionUrl?: string;
   time: string;
   read: boolean;
-  category: keyof NotificationSettings;
+  category: keyof NotificationSettings | "reminders";
   taskId?: string;
   reminderId?: string;
+  campaignId?: string;
+  screen?: string;
   applicationId?: string;
   conversationId?: string;
   adminChat?: boolean;

@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, ServiceUnavailableException } from "@nestjs/common";
 import nodemailer from "nodemailer";
 import { AppSettingsService } from "../settings/app-settings.service.js";
+import { formatBrandlyEmail, type BrandlyNotificationContent } from "../notification-templates.js";
 
 @Injectable()
 export class SmtpOtpService {
@@ -18,9 +19,9 @@ export class SmtpOtpService {
     );
   }
 
-  async sendNotification(email: string, subject: string, body: string, requestId: string): Promise<void> {
-    const escapedBody = body.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
-    await this.sendMail(email, subject, body, `<p>${escapedBody.replace(/\n/g, "<br />")}</p>`, requestId);
+  async sendNotification(email: string, subject: string, body: string, requestId: string, action?: Pick<BrandlyNotificationContent, "actionLabel" | "actionUrl">): Promise<void> {
+    const message = formatBrandlyEmail({ title: subject, body, ...action });
+    await this.sendMail(email, subject, message.text, message.html, requestId);
   }
 
   private async sendMail(email: string, subject: string, text: string, html: string, requestId: string): Promise<void> {

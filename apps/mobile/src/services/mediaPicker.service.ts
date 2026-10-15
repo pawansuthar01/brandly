@@ -110,6 +110,14 @@ export async function selectFileAttachment(): Promise<MediaAttachment | null> {
   return { id: `${Date.now()}`, name: item.name, type: 'file', uri: item.uri, mimeType: item.mimeType, size: item.size, uploadState: 'pending' };
 }
 
+export async function selectGifAttachment(): Promise<MediaAttachment | null> {
+  const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false, type: 'image/gif' });
+  if (result.canceled) return null;
+  const item = result.assets[0];
+  if (item.mimeType !== 'image/gif' && !item.name.toLowerCase().endsWith('.gif')) throw new Error('Choose a GIF image.');
+  return { id: `${Date.now()}`, name: item.name, type: 'image', uri: item.uri, mimeType: 'image/gif', size: item.size, uploadState: 'pending' };
+}
+
 export function uploadMediaAttachments(items: MediaAttachment[], category: MediaUploadCategory) {
   if (!items.length) return Promise.resolve(items);
   return withUploadFeedback(async () => {

@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsEnum, IsIn, IsOptional, IsString, IsUrl, MaxLength, MinLength } from "class-validator";
+import { IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsString, IsUrl, Max, MaxLength, Min, MinLength } from "class-validator";
 import { ProfileVisibility, UserRole } from "@prisma/client";
 
 export class UpdateProfileDto {
@@ -102,6 +102,12 @@ export class ReviewContentVerificationDto {
 export class ReviewSocialAccountDto {
   @IsIn(["VERIFIED"])
   status!: "VERIFIED";
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100_000_000)
+  followerCount?: number;
 }
 
 export class ProfileDirectoryQueryDto {

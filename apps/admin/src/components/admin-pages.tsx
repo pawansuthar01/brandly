@@ -2,18 +2,18 @@
 
 import {
   Activity, AlertTriangle, ArrowDown, ArrowLeft, ArrowUp, ArrowUpRight, BarChart3,
-  Bell, Check, CheckCircle2, ChevronDown, Eye, ExternalLink, FileCheck2, Filter,
-  FolderKanban, Image as ImageIcon, Palette, Paperclip,
+  Archive, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, Eye, EyeOff, ExternalLink, FileCheck2, Filter,
+  FolderKanban, Image as ImageIcon, MapPin, Palette, Paperclip,
   Database, KeyRound, Mail, MessageCircle, Search, Send, ShieldAlert,
-  SlidersHorizontal, Tag, Trash2, UserRound, Users, Video,
+  SlidersHorizontal, Trash2, UserRound, Users, Video,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  deleteAdminAppSettings, getAdminAppSettings, getAdminNotifications, getAdminSnapshot,
-  resolveAdminMediaUrl, saveAdminAppSettings, sendAdminNotifications, suspendUser, updateCampaignStatus,
+  deleteAdminAppSettings, getAdminAppSettings, getAdminCampaignApplications, getAdminNotificationLogs, getAdminNotifications, getAdminProposal, getAdminProposals, getAdminSnapshot,
+  resolveAdminMediaUrl, saveAdminAppSettings, sendAdminChatBroadcast, sendAdminNotifications, suspendUser, updateCampaignStatus,
 } from '@/services/adminApi.service';
 import { canAccessSection, type AdminRole } from '@/lib/admin-auth';
 import { useAdminSession } from '@/hooks/useAdminSession';
@@ -30,8 +30,10 @@ import type {
   AdminSnapshot,
   AdminUser,
   Campaign,
-  Category,
+  CampaignApplicationsPage,
   Proposal,
+  ProposalDetail,
+  ProposalPage,
   VersionConfig,
 } from '@/types/admin';
 import styles from './admin-pages.module.css';
@@ -45,7 +47,6 @@ const meta: Record<string, { title: string; eyebrow: string; description: string
   users: { title: 'Users & profiles', eyebrow: 'Marketplace', description: 'Keep profiles discoverable, trustworthy, and easy to review.', icon: Users },
   campaigns: { title: 'Campaigns', eyebrow: 'Marketplace', description: 'Review how brands are shaping briefs and where creators are finding momentum.', icon: FolderKanban },
   proposals: { title: 'Proposals', eyebrow: 'Marketplace', description: 'Inspect collaboration intent, scope, pricing, and attached media in one view.', icon: FileCheck2 },
-  categories: { title: 'Categories', eyebrow: 'Marketplace', description: 'Manage the taxonomy that powers discovery and matching.', icon: Tag },
   'app-settings': { title: 'App settings', eyebrow: 'System', description: 'Control version guidance, release notes, and essential product content.', icon: SlidersHorizontal },
   notifications: { title: 'Send notifications', eyebrow: 'Trust & content', description: 'Send a clear in-app, push, or email update to selected marketplace users.', icon: Bell },
   'notification-logs': { title: 'Notification logs', eyebrow: 'Trust & content', description: 'Review the latest app, system, and admin notifications delivered across the marketplace.', icon: Activity },
@@ -73,7 +74,7 @@ function notificationDeliveryStatus(item: AdminNotificationRecord) {
   return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
-function Avatar({ label }: { label: string }) { return <span className={styles.avatar}>{label.slice(0, 2).toUpperCase()}</span>; }
+function Avatar({ label, imageUrl }: { label: string; imageUrl?: string | null }) { return <span className={styles.avatar}>{label.slice(0, 2).toUpperCase()}{imageUrl && <img src={resolveAdminMediaUrl(imageUrl)} alt="" onError={(event) => event.currentTarget.remove()} />}</span>; }
 
 function Panel({ title, hint, children, action }: { title: string; hint?: string; children: React.ReactNode; action?: React.ReactNode }) {
   return <section className={styles.panel}><div className={styles.panelHeader}><div><h2 className={styles.panelTitle}>{title}</h2>{hint && <p className={styles.panelHint}>{hint}</p>}</div>{action}</div>{children}</section>;
@@ -173,6 +174,17 @@ function useColumns(key: string, columns: { key: string; locked?: boolean }[]) {
 function Field({ label, children, full = false }: { label: string; children: React.ReactNode; full?: boolean }) { return <div className={`${styles.field} ${full ? styles.fieldFull : ''}`}><label>{label}</label>{children}</div>; }
 function SettingsToggle({ label, description, enabled, onChange }: { label: string; description: string; enabled: boolean; onChange: (value: boolean) => void }) { return <label className={styles.settingRow}><div><strong>{label}</strong><span>{description}</span></div><input type="checkbox" checked={enabled} onChange={(event) => onChange(event.target.checked)} /></label>; }
 function DetailItem({ label, value }: { label: string; value: string }) { return <div className={styles.detailItem}><div className={styles.detailLabel}>{label}</div><div className={styles.detailValue}>{value}</div></div>; }
+
+function proposalValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return 'Not provided';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return value.map((item) => proposalValue(item)).join(', ');
+  return JSON.stringify(value);
+}
+
+function proposalLabel(value: string): string {
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
 function EmptyState({ icon: Icon, title, description }: { icon: LucideIcon; title: string; description: string }) { return <div className={styles.empty}><div className={styles.emptyIcon}><Icon size={19} /></div><strong>{title}</strong><span>{description}</span></div>; }
 
 function MediaFiles({ files = [] }: { files?: AdminMediaFile[] }) {
@@ -235,64 +247,42 @@ export function AdminDashboardPage() {
   if (!snapshot) return <LoadingPage />;
   const activeCreators = snapshot.users.filter((item) => item.role === 'Creator' && item.status === 'Active').length;
   const activeBrands = snapshot.users.filter((item) => item.role === 'Brand' && item.status === 'Active').length;
-  const newProposals = snapshot.proposals.filter((item) => item.status === 'New' || item.status === 'In review');
+  const newProposals = snapshot.proposals.filter((item) => item.status === 'New');
   const publishedCampaigns = snapshot.campaigns.filter((item) => item.status === 'Published' || item.status === 'Active');
-  const healthRows = [
-    { label: 'Creator accounts', value: activeCreators, total: snapshot.users.filter((item) => item.role === 'Creator').length, href: '/admin/users' },
-    { label: 'Brand accounts', value: activeBrands, total: snapshot.users.filter((item) => item.role === 'Brand').length, href: '/admin/users' },
-    { label: 'Published campaigns', value: publishedCampaigns.length, total: snapshot.campaigns.length, href: '/admin/campaigns' },
-    { label: 'Applications', value: snapshot.proposals.length, total: snapshot.proposals.length, href: '/admin/proposals' },
-  ];
-  const workQueue = [
-    { label: 'New proposals', value: newProposals.length, detail: 'New or in-review applications', icon: FileCheck2, href: '/admin/proposals', tone: 'blue' },
-    { label: 'Active campaigns', value: publishedCampaigns.length, detail: 'Published and visible campaigns', icon: FolderKanban, href: '/admin/campaigns', tone: 'green' },
-    { label: 'Marketplace accounts', value: snapshot.users.length, detail: 'Brands and creators', icon: Users, href: '/admin/users', tone: 'slate' },
-  ] as const;
   const stats = [
     { label: 'Marketplace accounts', value: String(snapshot.users.length), delta: `${activeCreators} creators · ${activeBrands} brands`, icon: Users, tone: 'blue' },
     { label: 'Active campaigns', value: String(publishedCampaigns.length), delta: `${snapshot.campaigns.filter((item) => item.status === 'Private').length} private drafts`, icon: FolderKanban, tone: 'orange' },
     { label: 'Proposals', value: String(snapshot.proposals.length), delta: `${newProposals.length} pending`, icon: BarChart3, tone: 'green' },
     { label: 'Suspended accounts', value: String(snapshot.users.filter((item) => item.status === 'Suspended').length), delta: 'Database account status', icon: ShieldAlert, tone: 'slate' },
   ] as const;
-  return <div className={styles.page}>
+  return <div className={`${styles.page} ${styles.dashboardPage}`}>
     <PageHeader
       eyebrow="Overview"
       title="Admin command center"
       description="Marketplace health from the application database."
       action={<div className={styles.headerActions}><Button variant="primary" href="/admin/users"><Users size={15} /> Browse accounts</Button></div>}
     />
-    <div className={styles.roleBanner}><Database size={16} /><div><strong>Live database overview</strong><span>Account, campaign, and application counts come from saved records.</span></div></div>
     <div className={styles.dashboardHero}>
       <div className={styles.dashboardHeroMain}>
-        <p className={styles.eyebrow}>Today needs attention</p>
-        <h2>{newProposals.length} applications need review</h2>
-        <p>Current campaign applications and account records loaded from the API.</p>
+        <p className={styles.eyebrow}>Needs attention</p>
+        <h2>Social account review queue</h2>
+        <p>Check submitted profiles and evidence in one place.</p>
       </div>
       <div className={styles.dashboardHeroActions}>
         <Status value="Database connected" />
-        {isOwner ? <Button variant="secondary" href="/admin/app-settings"><SlidersHorizontal size={15} /> Release settings</Button> : <Button variant="secondary" href="/admin/users"><Users size={15} /> Browse accounts</Button>}
+        <Button variant="primary" href="/admin/social-reviews"><CheckCircle2 size={15} /> Open social reviews</Button>
+        {isOwner && <Button variant="secondary" href="/admin/app-settings"><SlidersHorizontal size={15} /> Settings</Button>}
       </div>
     </div>
     <div className={styles.gridStats}>{stats.map((item) => { const Icon = item.icon; return <div className={styles.statCard} key={item.label}><div className={styles.statTop}><span className={styles.statLabel}>{item.label}</span><span className={`${styles.statIcon} ${styles[`stat${item.tone[0].toUpperCase()}${item.tone.slice(1)}`]}`}><Icon size={17} /></span></div><div className={styles.statValue}>{item.value}</div><span className={styles.statDelta}><ArrowUpRight size={13} />{item.delta}</span></div>; })}</div>
-    <div className={styles.dashboardQueue}>{workQueue.map((item) => { const Icon = item.icon; return <Link href={item.href} className={styles.queueCard} key={item.label}><span className={`${styles.statIcon} ${styles[`stat${item.tone[0].toUpperCase()}${item.tone.slice(1)}`]}`}><Icon size={16} /></span><div><strong>{item.value}</strong><span>{item.label}</span><p>{item.detail}</p></div><ChevronDown size={15} /></Link>; })}</div>
-    <div className={styles.twoCol}>
-      <Panel title="Marketplace health" hint="Ratios from saved database records" action={<Button variant="ghost" href="/admin/users">Open users <ChevronDown size={14} /></Button>}>
-        <div className={styles.healthList}>{healthRows.map((row) => <Link href={row.href} className={styles.healthRow} key={row.label}><div><strong>{row.label}</strong><span>{row.value} of {row.total}</span></div><div className={styles.progressTrack} aria-hidden="true"><span style={{ width: `${row.total ? Math.round((row.value / row.total) * 100) : 0}%` }} /></div></Link>)}</div>
-      </Panel>
-      <Panel title="Quick actions" hint="Live data and configuration">
-        <div className={styles.panelBody}><div className={styles.quickGrid}><QuickAction icon={Users} label="Find account" href="/admin/users" /><QuickAction icon={FolderKanban} label="Browse campaigns" href="/admin/campaigns" /><QuickAction icon={Bell} label="Send notification" href="/admin/notifications" />{isOwner && <QuickAction icon={SlidersHorizontal} label="App settings" href="/admin/app-settings" />}</div></div>
-      </Panel>
-    </div>
     <div className={styles.dashboardThree}>
-      <Panel title="Recent proposals" hint="Newest collaboration intents"><div className={styles.compactList}>{snapshot.proposals.slice(0, 5).map((item) => <Link href={`/admin/proposals/${item.id}`} className={styles.compactItem} key={item.id}><span className={styles.statIcon + ' ' + styles.statOrange}>{item.hasMedia ? <ImageIcon size={15} /> : <FileCheck2 size={15} />}</span><div><strong>{item.title}</strong><span>{item.from} to {item.to}</span></div><Status value={item.status} /></Link>)}</div></Panel>
-      <Panel title="Campaign activity" hint="Recently updated database records"><div className={styles.compactList}>{snapshot.campaigns.slice(0, 5).map((item) => <Link href={`/admin/campaigns/${item.id}`} className={styles.compactItem} key={item.id}><span className={styles.statIcon + ' ' + styles.statBlue}><FolderKanban size={15} /></span><div><strong>{item.title}</strong><span>{item.brand} · {item.category}</span></div><Status value={item.status} /></Link>)}</div></Panel>
+      <Panel title="Recent applications" hint="Latest saved campaign applications"><div className={styles.compactList}>{snapshot.proposals.slice(0, 5).map((item) => <Link href={`/admin/proposals/${item.id}`} className={styles.compactItem} key={item.id}><span className={`${styles.statIcon} ${styles.statOrange}`}><FileCheck2 size={15} /></span><div><strong>{item.campaign}</strong><span>{item.from} → {item.to}</span></div><Status value={item.status} /></Link>)}</div>{!snapshot.proposals.length && <EmptyState icon={FileCheck2} title="No applications yet" description="New campaign applications will appear here." />}</Panel>
+      <Panel title="Campaign activity" hint="Recently updated campaigns"><div className={styles.compactList}>{snapshot.campaigns.slice(0, 5).map((item) => <Link href={`/admin/campaigns/${item.id}`} className={styles.compactItem} key={item.id}><span className={`${styles.statIcon} ${styles.statBlue}`}><FolderKanban size={15} /></span><div><strong>{item.title}</strong><span>{item.brand} · {item.category}</span></div><Status value={item.status} /></Link>)}</div>{!snapshot.campaigns.length && <EmptyState icon={FolderKanban} title="No campaigns yet" description="Saved campaigns will appear here." />}</Panel>
     </div>
-    <Panel title="Recent applications" hint="Latest saved campaign applications"><div className={styles.compactList}>{snapshot.proposals.slice(0, 5).map((item) => <Link href={`/admin/proposals/${item.id}`} className={styles.compactItem} key={item.id}><span className={styles.statIcon + ' ' + styles.statOrange}><FileCheck2 size={15} /></span><div><strong>{item.campaign}</strong><span>{item.from} → {item.to}</span></div><Status value={item.status} /></Link>)}</div></Panel>
   </div>;
 }
 
 function ActivityItem({ dot, action, target, time }: { dot: ActivityEntry['tone']; action: string; target: string; time: string }) { return <div className={styles.activityItem}><span className={`${styles.activityDot} ${dot !== 'blue' ? styles[dot] : ''}`} /><div><div className={styles.activityAction}>{action}</div><div className={styles.activityTarget}>{target}</div></div><span className={styles.activityTime}>{time}</span></div>; }
-function QuickAction({ icon: Icon, label, href }: { icon: LucideIcon; label: string; href: string }) { return <Link href={href} className={`${styles.contentCard} ${styles.quickAction}`}><Icon size={17} /><span>{label}</span></Link>; }
 function LoadingPage() { return <div className={styles.page}><div className={styles.gridStats}>{[1, 2, 3, 4].map((item) => <div className={styles.skeleton} key={item} />)}</div><div className={`${styles.skeleton} ${styles.pageSkeleton}`} /></div>; }
 function LoadFailure({ message, retry }: { message: string; retry: () => void }) { return <div className={styles.page}><div className={styles.errorInline} role="alert">{message}</div><Button variant="secondary" onClick={retry}><Activity size={14} /> Retry</Button></div>; }
 
@@ -316,13 +306,19 @@ function UsersView({ data, onToast, canSuspend }: { data: AdminUser[]; onToast: 
   const [visibility, setVisibility] = useState('All');
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmUser, setConfirmUser] = useState<AdminUser | null>(null);
+  const userActions = (user: AdminUser) => <div className={styles.userActions}>
+    <Button variant="ghost" href={`/admin/users/${user.id}`}><Eye size={14} /> Profile</Button>
+    <Button variant="ghost" href={`/admin/users/${user.id}/settings`}><SlidersHorizontal size={14} /> Settings</Button>
+    <Button variant="ghost" href={`/admin/notifications?user=${user.id}`}><Bell size={14} /> Notify</Button>
+    {canSuspend && user.status !== 'Deleted' ? <Button variant="ghost" onClick={() => setConfirmUser(user)} disabled={busy === user.id}>{user.status === 'Suspended' ? <><Check size={14} /> Restore</> : <><ShieldAlert size={14} /> Suspend</>}</Button> : user.status === 'Deleted' ? <Status value="Deleted" /> : <Status value="Read only" />}
+  </div>;
   const columns: Column<AdminUser>[] = [
-    { key: 'profile', label: 'Profile', locked: true, render: (user) => <div className={styles.entity}><Avatar label={user.avatar} /><div><div className={styles.entityName}>{user.name}</div><div className={styles.entityMeta}>{user.email}</div></div></div> },
+    { key: 'profile', label: 'Profile', locked: true, render: (user) => <div className={styles.entity}><Avatar label={user.avatar} imageUrl={user.avatarUrl} /><div><div className={styles.entityName}>{user.name}</div><div className={styles.entityMeta}>{user.email}</div></div></div> },
     { key: 'role', label: 'Role', render: (user) => user.role },
     { key: 'location', label: 'Location', render: (user) => user.location },
     { key: 'status', label: 'Status', render: (user) => <Status value={user.status} /> },
-    { key: 'joined', label: 'Joined', render: (user) => user.joined },
-    { key: 'actions', label: '', locked: true, render: (user) => <div className={styles.rowActions}><Button variant="ghost" href={`/admin/users/${user.id}`}><Eye size={14} /> Profile</Button><Button variant="ghost" href={`/admin/users/${user.id}/campaigns`}><FolderKanban size={14} /> Campaigns</Button><Button variant="ghost" href={`/admin/users/${user.id}/proposals`}><FileCheck2 size={14} /> Proposals</Button><Button variant="ghost" href={`/admin/users/${user.id}/settings`}><SlidersHorizontal size={14} /> Settings</Button><Button variant="ghost" href={`/admin/notifications?user=${user.id}`}><Bell size={14} /> Notify</Button>{canSuspend && user.status !== 'Deleted' ? <Button variant="ghost" onClick={() => setConfirmUser(user)} disabled={busy === user.id}>{user.status === 'Suspended' ? 'Restore' : 'Suspend'}</Button> : user.status === 'Deleted' ? <Status value="Deleted" /> : <Status value="Read only" />}</div> },
+    { key: 'joined', label: 'Joined', render: (user) => formatUserJoined(user.joined) },
+    { key: 'actions', label: '', locked: true, render: userActions },
   ];
   const [visibleColumns, setVisibleColumns] = useColumns('users', columns);
   const filtered = useMemo(() => items.filter((item) => `${item.name} ${item.email} ${item.location}`.toLowerCase().includes(query.toLowerCase()) && (filter === 'All' || item.status === filter) && (role === 'All' || item.role === role) && (visibility === 'All' || (visibility === 'Public' ? item.profileVisible : !item.profileVisible))), [filter, items, query, role, visibility]);
@@ -337,53 +333,83 @@ function UsersView({ data, onToast, canSuspend }: { data: AdminUser[]; onToast: 
     } catch (error) { onToast(error instanceof Error ? error.message : 'Account status could not be updated.'); }
     setBusy(null); setConfirmUser(null);
   };
-  return <><Panel title="All accounts" hint={`${filtered.length} of up to 200 latest database records`}><DataToolbar query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} options={['All', 'Active', 'Suspended', 'Pending review', 'Deleted']} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'role', label: 'Role', value: role, options: ['All', 'Creator', 'Brand'], onChange: setRole }, { key: 'visibility', label: 'Visibility', value: visibility, options: ['All', 'Public', 'Private'], onChange: setVisibility }]} /><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={Users} title="No accounts found" description="There are no database records for the selected filters." />} /><Pagination {...pagination} total={filtered.length} /></Panel>{confirmUser && <ConfirmDialog title={confirmUser.status === 'Suspended' ? 'Restore this account?' : 'Suspend this account?'} description={`${confirmUser.name} will ${confirmUser.status === 'Suspended' ? 'be visible and active again' : 'not be able to use marketplace actions'} in this environment.`} confirmLabel={confirmUser.status === 'Suspended' ? 'Restore account' : 'Suspend account'} danger={confirmUser.status !== 'Suspended'} reasonRequired={confirmUser.status !== 'Suspended'} busy={busy === confirmUser.id} onCancel={() => setConfirmUser(null)} onConfirm={toggle} />}</>;
+  return <><Panel title="All accounts" hint={`${filtered.length} of up to 200 latest database records`}><DataToolbar query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} options={['All', 'Active', 'Suspended', 'Pending review', 'Deleted']} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'role', label: 'Role', value: role, options: ['All', 'Creator', 'Brand'], onChange: setRole }, { key: 'visibility', label: 'Visibility', value: visibility, options: ['All', 'Public', 'Private'], onChange: setVisibility }]} />{pagination.pageItems.length === 0 ? <EmptyState icon={Users} title="No accounts found" description="There are no database records for the selected filters." /> : <><div className={styles.usersTable}><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={null} /></div><div className={styles.userCards}>{pagination.pageItems.map((user) => <article className={styles.userCard} key={user.id}><div className={styles.userCardHeader}><div className={styles.userCardIdentity}><Avatar label={user.avatar} imageUrl={user.avatarUrl} /><div><strong>{user.name}</strong><span>{user.email}</span></div></div><Status value={user.status} /></div><div className={styles.userCardFacts}><div><span>Role</span><strong>{user.role}</strong></div><div><span>Location</span><strong><MapPin size={13} />{user.location}</strong></div><div><span>Joined</span><strong><CalendarDays size={13} />{formatUserJoined(user.joined)}</strong></div></div>{userActions(user)}</article>)}</div></>}<Pagination {...pagination} total={filtered.length} /></Panel>{confirmUser && <ConfirmDialog title={confirmUser.status === 'Suspended' ? 'Restore this account?' : 'Suspend this account?'} description={`${confirmUser.name} will ${confirmUser.status === 'Suspended' ? 'be visible and active again' : 'not be able to use marketplace actions'} in this environment.`} confirmLabel={confirmUser.status === 'Suspended' ? 'Restore account' : 'Suspend account'} danger={confirmUser.status !== 'Suspended'} reasonRequired={confirmUser.status !== 'Suspended'} busy={busy === confirmUser.id} onCancel={() => setConfirmUser(null)} onConfirm={toggle} />}</>;
 }
 
-function CampaignsView({ data, users }: { data: Campaign[]; users: AdminUser[] }) {
+function formatUserJoined(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
+}
+
+function CampaignsView({ data, users, onToast, reload }: { data: Campaign[]; users: AdminUser[]; onToast: (message: string) => void; reload: () => Promise<void> }) {
   const [query, setQuery] = useState(''); const [filter, setFilter] = useState('All'); const [category, setCategory] = useState('All'); const items = data;
+  const [pendingCampaignAction, setPendingCampaignAction] = useState<{ campaign: Campaign; status: 'Private' | 'Archived' } | null>(null);
+  const [busyCampaign, setBusyCampaign] = useState<string | null>(null);
+  const applyCampaignAction = async () => {
+    if (!pendingCampaignAction) return;
+    setBusyCampaign(pendingCampaignAction.campaign.id);
+    try {
+      await updateCampaignStatus(pendingCampaignAction.campaign.id, pendingCampaignAction.status);
+      onToast(pendingCampaignAction.status === 'Private' ? 'Campaign hidden from the marketplace.' : 'Campaign archived.');
+      setPendingCampaignAction(null);
+      try { await reload(); }
+      catch { onToast('Campaign status was saved, but the list could not refresh. Reload the page to see the latest status.'); }
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : 'Campaign status could not be updated.');
+    } finally { setBusyCampaign(null); }
+  };
   const columns: Column<Campaign>[] = [
-    { key: 'campaign', label: 'Campaign', locked: true, render: (campaign) => <div className={styles.entity}><span className={styles.statIcon + ' ' + styles.statBlue}><FolderKanban size={15} /></span><div><div className={styles.entityName}>{campaign.title}</div><div className={styles.entityMeta}>{campaign.category}</div></div></div> },
-    { key: 'brand', label: 'Brand / user', render: (campaign) => { const user = users.find((item) => item.name === campaign.brand); return user ? <Button variant="ghost" href={`/admin/users/${user.id}`}><UserRound size={14} /> {campaign.brand}</Button> : campaign.brand; } },
-    { key: 'location', label: 'Location', render: (campaign) => campaign.location },
+    { key: 'campaign', label: 'Campaign', locked: true, render: (campaign) => <div className={styles.entity}><span className={styles.statIcon + ' ' + styles.statBlue}><FolderKanban size={15} /></span><div><div className={styles.entityName}>{campaign.title}</div><div className={styles.entityMeta}>{[campaign.category, campaign.location].filter(Boolean).join(' · ')}</div></div></div> },
+    { key: 'brand', label: 'Brand', render: (campaign) => { const user = users.find((item) => item.id === campaign.brandId); return user ? <Button variant="ghost" href={`/admin/users/${user.id}`}><UserRound size={14} /> {campaign.brand}</Button> : campaign.brand; } },
     { key: 'status', label: 'Status', render: (campaign) => <Status value={campaign.status} /> },
+    { key: 'budget', label: 'Budget', render: (campaign) => campaign.budget || 'Not set' },
     { key: 'deadline', label: 'Deadline', render: (campaign) => formatCampaignDeadline(campaign.deadlineAt) },
-    { key: 'proposals', label: 'Proposals', render: (campaign) => campaign.proposals },
-    { key: 'budget', label: 'Budget', render: (campaign) => campaign.budget },
+    { key: 'proposals', label: 'Applications', render: (campaign) => campaign.proposals },
+    { key: 'location', label: 'Target location', render: (campaign) => campaign.location || 'Not specified' },
+    { key: 'category', label: 'Category', render: (campaign) => campaign.category || 'Not set' },
+    { key: 'platforms', label: 'Platforms', render: (campaign) => campaign.platforms.length ? campaign.platforms.join(', ') : 'Not specified' },
     { key: 'media', label: 'Media', render: (campaign) => campaign.media?.length ? `${campaign.media.length} files` : 'None' },
-    { key: 'updated', label: 'Updated', render: (campaign) => campaign.updated },
-    { key: 'actions', label: '', locked: true, render: (campaign) => <div className={styles.rowActions}><Button variant="ghost" href={`/admin/campaigns/${campaign.id}`}><Eye size={14} /> View</Button>{users.find((item) => item.name === campaign.brand) && <Button variant="ghost" href={`/admin/users/${users.find((item) => item.name === campaign.brand)?.id}`}><UserRound size={14} /> User</Button>}</div> },
+    { key: 'updated', label: 'Updated', render: (campaign) => formatCampaignDeadline(campaign.updated) },
+    { key: 'actions', label: 'Actions', locked: true, render: (campaign) => <div className={styles.campaignActions}><Button variant="ghost" href={`/admin/campaigns/${campaign.id}`}><Eye size={14} /> View</Button>{users.some((item) => item.id === campaign.brandId) && <Button variant="ghost" href={`/admin/users/${campaign.brandId}`}><UserRound size={14} /> Brand</Button>}{campaign.status !== 'Archived' && <Button variant="ghost" onClick={() => setPendingCampaignAction({ campaign, status: campaign.status === 'Published' || campaign.status === 'Active' ? 'Private' : 'Archived' })}>{campaign.status === 'Published' || campaign.status === 'Active' ? <><EyeOff size={14} /> Hide</> : <><Archive size={14} /> Archive</>}</Button>}</div> },
   ];
   const [visibleColumns, setVisibleColumns] = useColumns('campaigns', columns);
   const categories = ['All', ...Array.from(new Set(items.map((item) => item.category)))];
-  const filtered = items.filter((item) => `${item.title} ${item.brand} ${item.category}`.toLowerCase().includes(query.toLowerCase()) && (filter === 'All' || item.status === filter) && (category === 'All' || item.category === category));
+  const filtered = items.filter((item) => `${item.title} ${item.description} ${item.brand} ${item.category} ${item.location} ${item.platforms.join(' ')}`.toLowerCase().includes(query.toLowerCase()) && (filter === 'All' || item.status === filter) && (category === 'All' || item.category === category));
   const pagination = usePagination(filtered, 5, `${query}|${filter}|${category}`);
-  return <Panel title="Campaign workspace" hint={`${filtered.length} campaigns · management only`}><DataToolbar query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} options={['All', 'Active', 'Published', 'Private', 'Completed', 'Archived']} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'category', label: 'Category', value: category, options: categories, onChange: setCategory }]} /><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={FolderKanban} title="No campaigns found" description="Try clearing filters to see more campaigns." />} /><Pagination {...pagination} total={filtered.length} /></Panel>;
+  return <><Panel title="Campaigns" hint={`${filtered.length} of ${data.length} latest database records`}><DataToolbar query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} options={['All', 'Draft', 'Published', 'Active', 'Private', 'Completed', 'Archived']} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'category', label: 'Category', value: category, options: categories, onChange: setCategory }]} /><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={FolderKanban} title="No campaigns found" description="Try clearing filters to see more campaigns." />} /><Pagination {...pagination} total={filtered.length} /></Panel>{pendingCampaignAction && <ConfirmDialog title={pendingCampaignAction.status === 'Private' ? 'Hide this campaign?' : 'Archive this campaign?'} description={pendingCampaignAction.status === 'Private' ? 'It will no longer appear in the public marketplace. Existing applications and campaign data will remain saved.' : 'It will be archived and stop accepting new marketplace activity. Existing applications and campaign data will remain saved.'} confirmLabel={pendingCampaignAction.status === 'Private' ? 'Hide campaign' : 'Archive campaign'} danger busy={busyCampaign === pendingCampaignAction.campaign.id} onCancel={() => setPendingCampaignAction(null)} onConfirm={applyCampaignAction} />}</>;
 }
 
-function ProposalsView({ data, users }: { data: Proposal[]; users: AdminUser[] }) {
-  const [query, setQuery] = useState(''); const [filter, setFilter] = useState('All'); const [media, setMedia] = useState('All');
+function ProposalsView() {
+  const [query, setQuery] = useState(''); const [search, setSearch] = useState(''); const [filter, setFilter] = useState('All'); const [media, setMedia] = useState('All');
+  const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(20); const [refresh, setRefresh] = useState(0);
+  const [result, setResult] = useState<ProposalPage | null>(null); const [loading, setLoading] = useState(true); const [loadError, setLoadError] = useState('');
+  useEffect(() => { const timer = window.setTimeout(() => setSearch(query.trim()), 250); return () => window.clearTimeout(timer); }, [query]);
+  useEffect(() => { setPage(1); }, [search, filter, media, pageSize]);
+  useEffect(() => {
+    let current = true;
+    setLoading(true); setLoadError('');
+    void getAdminProposals({ take: pageSize, offset: (page - 1) * pageSize, query: search, status: filter, media })
+      .then((response) => { if (current) setResult(response); })
+      .catch((reason) => { if (current) setLoadError(reason instanceof Error ? reason.message : 'Proposals could not be loaded.'); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [filter, media, page, pageSize, refresh, search]);
   const columns: Column<Proposal>[] = [
     { key: 'proposal', label: 'Proposal', locked: true, render: (proposal) => <div className={styles.entity}><span className={styles.statIcon + ' ' + styles.statOrange}>{proposal.hasMedia ? <ImageIcon size={15} /> : <FileCheck2 size={15} />}</span><div><div className={styles.entityName}>{proposal.title}</div><div className={styles.entityMeta}>{proposal.campaign}</div></div></div> },
-    { key: 'from', label: 'From / user', render: (proposal) => { const user = users.find((item) => item.name === proposal.from); return user ? <Button variant="ghost" href={`/admin/users/${user.id}`}><UserRound size={14} /> {proposal.from}</Button> : proposal.from; } },
-    { key: 'to', label: 'To / user', render: (proposal) => { const user = users.find((item) => item.name === proposal.to); return user ? <Button variant="ghost" href={`/admin/users/${user.id}`}><UserRound size={14} /> {proposal.to}</Button> : proposal.to; } },
+    { key: 'direction', label: 'Direction', render: (proposal) => proposal.invitedByBrand ? 'Brand invitation' : 'Creator application' },
+    { key: 'from', label: 'Creator', render: (proposal) => <Button variant="ghost" href={`/admin/users/${proposal.creatorId}`}><UserRound size={14} /> {proposal.from}</Button> },
+    { key: 'to', label: 'Brand', render: (proposal) => <Button variant="ghost" href={`/admin/users/${proposal.brandId}`}><UserRound size={14} /> {proposal.to}</Button> },
     { key: 'status', label: 'Status', render: (proposal) => <Status value={proposal.status} /> },
     { key: 'budget', label: 'Budget', render: (proposal) => proposal.budget },
     { key: 'media', label: 'Media', render: (proposal) => proposal.media?.length ? `${proposal.media.length} files` : proposal.hasMedia ? 'Attached' : 'None' },
+    { key: 'submitted', label: 'Submitted', render: (proposal) => formatCampaignDeadline(proposal.submittedAt) },
     { key: 'updated', label: 'Updated', render: (proposal) => proposal.updated },
-    { key: 'actions', label: '', locked: true, render: (proposal) => <div className={styles.rowActions}><Button variant="ghost" href={`/admin/proposals/${proposal.id}`}><Eye size={14} /> View</Button>{users.filter((item) => item.name === proposal.from || item.name === proposal.to).map((user) => <Button variant="ghost" href={`/admin/users/${user.id}`} key={user.id}><UserRound size={14} /> User</Button>)}</div> },
+    { key: 'actions', label: 'Actions', locked: true, render: (proposal) => <div className={styles.rowActions}><Button variant="ghost" href={`/admin/proposals/${proposal.id}`}><Eye size={14} /> View</Button><Button variant="ghost" href={`/admin/campaigns/${proposal.campaignId}`}><FolderKanban size={14} /> Campaign</Button></div> },
   ];
   const [visibleColumns, setVisibleColumns] = useColumns('proposals', columns);
-  const filtered = data.filter((item) => `${item.title} ${item.from} ${item.to} ${item.campaign}`.toLowerCase().includes(query.toLowerCase()) && (filter === 'All' || item.status === filter) && (media === 'All' || (media === 'With media' ? item.hasMedia : !item.hasMedia)));
-  const pagination = usePagination(filtered, 5, `${query}|${filter}|${media}`);
-  return <Panel title="Proposal flow" hint={`${filtered.length} proposals`}><DataToolbar query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} options={['All', 'New', 'In review', 'Accepted', 'Declined', 'Completed']} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'media', label: 'Media', value: media, options: ['All', 'With media', 'No media'], onChange: setMedia }]} /><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={FileCheck2} title="No proposals found" description="Try another query or status." />} /><Pagination {...pagination} total={filtered.length} /></Panel>;
-}
-
-function CategoriesView({ data }: { data: Category[] }) {
-  const [query, setQuery] = useState('');
-  const filtered = data.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()));
-  const pagination = usePagination(filtered, 10, query);
-  return <Panel title="Campaign categories" hint="Derived from saved campaign records; taxonomy editing is not stored by this API."><DataToolbar query={query} setQuery={setQuery} filter="All" setFilter={() => undefined} options={['All']} columns={[]} visibleColumns={[]} setVisibleColumns={() => undefined} /><div className={`${styles.cardGrid} ${styles.cardGridPadded}`}>{pagination.pageItems.map((item) => <div className={styles.contentCard} key={item.id}><div className={styles.contentCardTop}><div><h3>{item.name}</h3><p>{item.usage} saved campaigns</p></div><Status value="Active" /></div></div>)}</div>{filtered.length === 0 && <EmptyState icon={Tag} title="No campaign categories" description="Categories appear here after brands save campaigns." />}<Pagination {...pagination} total={filtered.length} /></Panel>;
+  const pageCount = Math.max(1, Math.ceil((result?.total ?? 0) / pageSize));
+  const pagination = { page, pageCount, pageSize, total: result?.total ?? 0, pageItems: result?.items ?? [], setPage, setPageSize };
+  return <Panel title="Proposal flow" hint={result ? `${result.total} saved applications` : 'Applications saved in the marketplace database'}><DataToolbar query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} filterLabel="Status" options={['All', 'New', 'Accepted', 'Declined', 'Withdrawn', 'Completed']} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'media', label: 'Media', value: media, options: ['All', 'With media', 'No media'], onChange: setMedia }]} />{loading ? <div className={styles.empty}>Loading proposals…</div> : loadError ? <div className={styles.panelBody}><div className={styles.errorInline} role="alert">{loadError}</div><Button variant="secondary" onClick={() => setRefresh((value) => value + 1)}><Activity size={14} /> Retry</Button></div> : <><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={FileCheck2} title="No proposals found" description="Try clearing the search or filters." />} /><Pagination {...pagination} total={pagination.total} /></>}</Panel>;
 }
 
 function AppSettingsView({ onToast }: { onToast: (message: string) => void }) {
@@ -495,8 +521,46 @@ export function AdminDetailPage({ section, id }: { section: string; id: string }
   const [pendingAction, setPendingAction] = useState<DetailAction | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const { role, ready } = useAdminSession();
+  const [applicationPage, setApplicationPage] = useState(1);
+  const [applicationData, setApplicationData] = useState<CampaignApplicationsPage | null>(null);
+  const [applicationError, setApplicationError] = useState('');
+  const [applicationLoading, setApplicationLoading] = useState(false);
+  const [applicationRefresh, setApplicationRefresh] = useState(0);
+  const [proposalDetail, setProposalDetail] = useState<ProposalDetail | null>(null);
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [proposalError, setProposalError] = useState('');
+  const [proposalRefresh, setProposalRefresh] = useState(0);
   const adminRole: AdminRole = role ?? 'Moderator';
   useEffect(() => { if (!notice) return; const timer = window.setTimeout(() => setNotice(''), 2600); return () => window.clearTimeout(timer); }, [notice]);
+  useEffect(() => {
+    if (section !== 'campaigns' || !ready) return;
+    let current = true;
+    setApplicationLoading(true);
+    setApplicationError('');
+    setApplicationData(null);
+    void getAdminCampaignApplications(id, 20, (applicationPage - 1) * 20)
+      .then((result) => {
+        if (!current) return;
+        if (result.offset > 0 && result.offset >= result.total) {
+          setApplicationPage(Math.max(1, Math.ceil(result.total / result.take)));
+          return;
+        }
+        setApplicationData(result);
+      })
+      .catch((reason) => { if (current) setApplicationError(reason instanceof Error ? reason.message : 'Campaign applications could not be loaded.'); })
+      .finally(() => { if (current) setApplicationLoading(false); });
+    return () => { current = false; };
+  }, [applicationPage, applicationRefresh, id, ready, section]);
+  useEffect(() => {
+    if (section !== 'proposals' || !ready) return;
+    let current = true;
+    setProposalLoading(true); setProposalError(''); setProposalDetail(null);
+    void getAdminProposal(id)
+      .then((result) => { if (current) setProposalDetail(result); })
+      .catch((reason) => { if (current) setProposalError(reason instanceof Error ? reason.message : 'Proposal details could not be loaded.'); })
+      .finally(() => { if (current) setProposalLoading(false); });
+    return () => { current = false; };
+  }, [id, proposalRefresh, ready, section]);
   if (!ready) return <LoadingPage />;
   if (error) return <LoadFailure message={error} retry={() => void reload()} />;
   if (!snapshot) return <LoadingPage />;
@@ -519,8 +583,100 @@ export function AdminDetailPage({ section, id }: { section: string; id: string }
   const confirmation = pendingAction ? <ConfirmDialog title={pendingAction.title} description={pendingAction.description} confirmLabel={pendingAction.confirmLabel} danger={pendingAction.danger} reasonRequired={pendingAction.reasonRequired} busy={isSaving} onCancel={() => setPendingAction(null)} onConfirm={completeAction} /> : null;
   const noticeNode = notice && <div className={styles.notice}><CheckCircle2 size={16} />{notice}</div>;
   if (section === 'users') { const user = snapshot.users.find((item) => item.id === id); if (!user) return <EmptyState icon={Users} title="Profile not found" description="The requested profile is not available." />; const suspended = user.status === 'Suspended'; return <UserDetailContent user={user} isOwner={adminRole === 'Owner'} onSuspend={() => setPendingAction({ title: suspended ? 'Restore this account?' : 'Suspend this account?', description: suspended ? `${user.name} will regain marketplace access.` : `${user.name} will lose marketplace access until restored.`, confirmLabel: suspended ? 'Restore account' : 'Suspend account', danger: !suspended, reasonRequired: !suspended, successMessage: `${user.name} is now ${suspended ? 'active' : 'suspended'}.`, run: (reason) => suspendUser(user.id, !suspended, reason).then(() => undefined) })} noticeNode={noticeNode} confirmation={confirmation} />; }
-  if (section === 'campaigns') { const campaign = snapshot.campaigns.find((item) => item.id === id); if (!campaign) return <EmptyState icon={FolderKanban} title="Campaign not found" description="The requested campaign is not available." />; const proposals = snapshot.proposals.filter((item) => item.campaign === campaign.title); return <div className={styles.page}><PageHeader eyebrow="Campaign detail" title={campaign.title} description="See the brief, discovery context, saved media, and proposal activity for this campaign." action={backAction} /><DetailHero avatar={campaign.brand} title={campaign.brand} metaText={`${campaign.category} · ${campaign.location} · Updated ${campaign.updated}`} status={campaign.status} actions={<div className={styles.detailHeroActions}><Button variant="danger" onClick={() => setPendingAction({ title: 'Archive this campaign?', description: 'It will no longer be discoverable and new creator applications will stop.', confirmLabel: 'Archive campaign', danger: true, successMessage: 'Campaign archived and removed from discovery.', run: () => updateCampaignStatus(campaign.id, 'Archived') })}>Archive</Button></div>} />{noticeNode}<Panel title="Campaign summary"><div className={styles.panelBody}><div className={styles.detailGrid}><DetailItem label="Budget range" value={campaign.budget} /><DetailItem label="Location" value={campaign.location} /><DetailItem label="Category" value={campaign.category} /><DetailItem label="Deadline" value={formatCampaignDeadline(campaign.deadlineAt)} /><DetailItem label="Proposals" value={`${campaign.proposals} received`} /></div></div></Panel><Panel title="Campaign media" hint="All saved brief assets available to admin"><MediaFiles files={campaign.media} /></Panel><Panel title="Related proposals" hint={`${proposals.length} matched proposals`}><div className={styles.tableWrap}><table className={styles.table}><tbody>{proposals.map((proposal) => <tr key={proposal.id}><td>{proposal.title}</td><td>{proposal.from}</td><td><Status value={proposal.status} /></td><td><Button variant="ghost" href={`/admin/proposals/${proposal.id}`}>View</Button></td></tr>)}</tbody></table></div></Panel>{confirmation}</div>; }
-  if (section === 'proposals') { const proposal = snapshot.proposals.find((item) => item.id === id); if (!proposal) return <EmptyState icon={FileCheck2} title="Proposal not found" description="The requested proposal is not available." />; return <div className={styles.page}><PageHeader eyebrow="Proposal detail" title={proposal.title} description="Review scope, pricing, every attached media file, and the current collaboration state." action={backAction} /><DetailHero avatar={proposal.from} title={proposal.from} metaText={`${proposal.from} to ${proposal.to} · ${proposal.campaign}`} status={proposal.status} />{noticeNode}<Panel title="Proposal details"><div className={styles.panelBody}><div className={styles.detailGrid}><DetailItem label="Budget" value={proposal.budget} /><DetailItem label="Campaign" value={proposal.campaign} /><DetailItem label="Media count" value={proposal.media?.length ? `${proposal.media.length} files` : proposal.hasMedia ? 'Attached' : 'No media attached'} /><DetailItem label="Last updated" value={proposal.updated} /></div></div></Panel><Panel title="Attached media" hint="All files saved with this proposal"><MediaFiles files={proposal.media} /></Panel>{confirmation}</div>; }
+  if (section === 'campaigns') {
+    const campaign = snapshot.campaigns.find((item) => item.id === id);
+    if (!campaign) return <EmptyState icon={FolderKanban} title="Campaign not found" description="The requested campaign is not available." />;
+    const applications = applicationData?.items ?? [];
+    const brand = snapshot.users.find((user) => user.id === campaign.brandId);
+    const nextStatus = campaign.status === 'Published' || campaign.status === 'Active' ? 'Private' : 'Archived';
+    const applicationColumns: Column<Proposal>[] = [
+      { key: 'creator', label: 'Creator', render: (application) => <Button variant="ghost" href={`/admin/users/${application.creatorId}`}><UserRound size={14} /> {application.from}</Button> },
+      { key: 'status', label: 'Status', render: (application) => <Status value={application.status} /> },
+      { key: 'budget', label: 'Creator quote', render: (application) => application.budget || 'Not provided' },
+      { key: 'media', label: 'Attachments', render: (application) => application.media?.length ? `${application.media.length} files` : 'None' },
+      { key: 'updated', label: 'Updated', render: (application) => formatCampaignDeadline(application.updated) },
+      { key: 'actions', label: 'Actions', locked: true, render: (application) => <Button variant="ghost" href={`/admin/proposals/${application.id}`}><Eye size={14} /> View</Button> },
+    ];
+    return <div className={styles.page}>
+      <PageHeader eyebrow="Campaign detail" title={campaign.title} description={campaign.description || 'No campaign description was saved.'} action={backAction} />
+      <DetailHero avatar={campaign.brand} title={campaign.brand} metaText={`${campaign.category} · ${campaign.location} · Updated ${formatCampaignDeadline(campaign.updated)}`} status={campaign.status} actions={<div className={styles.detailHeroActions}>{brand && <Button variant="secondary" href={`/admin/users/${brand.id}`}><UserRound size={14} /> Brand profile</Button>}{campaign.status !== 'Archived' && <Button variant={nextStatus === 'Archived' ? 'danger' : 'secondary'} onClick={() => setPendingAction({ title: nextStatus === 'Private' ? 'Hide this campaign?' : 'Archive this campaign?', description: nextStatus === 'Private' ? 'It will no longer appear in the public marketplace. Existing applications and campaign data will remain saved.' : 'It will stop accepting new marketplace activity. Existing applications and campaign data will remain saved.', confirmLabel: nextStatus === 'Private' ? 'Hide campaign' : 'Archive campaign', danger: nextStatus === 'Archived', successMessage: nextStatus === 'Private' ? 'Campaign hidden from the marketplace.' : 'Campaign archived.', run: () => updateCampaignStatus(campaign.id, nextStatus) })}>{nextStatus === 'Private' ? <><EyeOff size={14} /> Hide</> : <><Archive size={14} /> Archive</>}</Button>}</div>} />
+      {noticeNode}
+      <Panel title="Campaign overview" hint="Saved campaign and marketplace state">
+        <div className={styles.panelBody}><div className={styles.detailGrid}>
+          <DetailItem label="Category" value={campaign.category || 'Not set'} />
+          <DetailItem label="Budget" value={campaign.budget || 'Not set'} />
+          <DetailItem label="Target locations" value={campaign.targetLocations.join(', ') || 'Not specified'} />
+          <DetailItem label="Preferred platforms" value={campaign.platforms.join(', ') || 'Not specified'} />
+          <DetailItem label="Deadline" value={formatCampaignDeadline(campaign.deadlineAt)} />
+          <DetailItem label="Applications" value={`${campaign.proposals} total`} />
+          <DetailItem label="Application limit" value={campaign.applicationLimit?.toString() || 'No limit'} />
+          <DetailItem label="Approval limit" value={campaign.approvalLimit?.toString() || 'No limit'} />
+          <DetailItem label="Published" value={formatCampaignDeadline(campaign.publishedAt)} />
+          <DetailItem label="Closed" value={formatCampaignDeadline(campaign.closedAt)} />
+          <DetailItem label="Created" value={formatCampaignDeadline(campaign.createdAt)} />
+          <DetailItem label="Last updated" value={formatCampaignDeadline(campaign.updated)} />
+        </div></div>
+      </Panel>
+      <Panel title="Campaign brief" hint="Content saved from the campaign form">
+        <div className={styles.panelBody}><div className={styles.detailGrid}>
+          <DetailItem label="Description" value={campaign.description || 'Not provided'} />
+          <DetailItem label="Deliverables" value={campaign.deliverables || 'Not provided'} />
+          <DetailItem label="Creator requirements" value={campaign.creatorRequirements || 'Not provided'} />
+          <DetailItem label="Requirements" value={campaign.requirements.join(' · ') || 'Not provided'} />
+          <DetailItem label="Close at application limit" value={campaign.closeOnApplicationLimit ? 'Yes' : 'No'} />
+          <DetailItem label="Close at approval limit" value={campaign.closeOnApprovalLimit ? 'Yes' : 'No'} />
+          {campaign.collaborationVideoUrl && <DetailItem label={campaign.collaborationVideoLabel || 'Collaboration video'} value={campaign.collaborationVideoUrl} />}
+        </div></div>
+      </Panel>
+      <Panel title="Campaign media" hint="Saved images, videos, and documents"><MediaFiles files={campaign.media} /></Panel>
+      <Panel title="Applications" hint={applicationData ? `${applicationData.total} total · ${applicationData.take} per page` : 'Applications saved for this campaign'}>
+        {applicationLoading ? <div className={styles.empty}>Loading campaign applications…</div> : applicationError ? <div className={styles.panelBody}><div className={styles.errorInline} role="alert">{applicationError}</div><Button variant="secondary" onClick={() => setApplicationRefresh((value) => value + 1)}><Activity size={14} /> Retry</Button></div> : <DataTable columns={applicationColumns} visibleColumns={applicationColumns.map((column) => column.key)} items={applications} empty={<EmptyState icon={FileCheck2} title="No applications yet" description="Creator applications for this campaign will appear here." />} />}
+        {applicationData && !applicationLoading && !applicationError && <Pagination page={applicationPage} pageCount={Math.max(1, Math.ceil(applicationData.total / applicationData.take))} pageSize={applicationData.take} total={applicationData.total} setPage={setApplicationPage} setPageSize={() => setApplicationPage(1)} pageItems={applications} />}
+      </Panel>
+      {confirmation}
+    </div>;
+  }
+  if (section === 'proposals') {
+    if (proposalLoading) return <LoadingPage />;
+    if (proposalError) return <div className={styles.page}><PageHeader eyebrow="Proposal detail" title="Proposal unavailable" description="The saved application could not be loaded." action={backAction} /><Panel title="Could not load proposal"><div className={styles.panelBody}><div className={styles.errorInline} role="alert">{proposalError}</div><Button variant="secondary" onClick={() => setProposalRefresh((value) => value + 1)}><Activity size={14} /> Retry</Button></div></Panel></div>;
+    const proposal = proposalDetail;
+    if (!proposal) return <EmptyState icon={FileCheck2} title="Proposal not found" description="The requested application is not available in the database." />;
+    const responseFields = Object.entries(proposal.responses).filter(([, value]) => value !== null && value !== undefined);
+    return <div className={styles.page}>
+      <PageHeader eyebrow={proposal.invitedByBrand ? 'Brand invitation' : 'Creator application'} title={proposal.campaign} description={proposal.message || 'No application message was saved.'} action={backAction} />
+      <DetailHero avatar={proposal.from} title={proposal.from} metaText={`${proposal.invitedByBrand ? 'Invited by' : 'Applied to'} ${proposal.to} · Submitted ${formatCampaignDeadline(proposal.submittedAt)}`} status={proposal.status} actions={<div className={styles.detailHeroActions}><Button variant="secondary" href={`/admin/users/${proposal.creatorId}`}><UserRound size={14} /> Creator</Button><Button variant="secondary" href={`/admin/users/${proposal.brandId}`}><UserRound size={14} /> Brand</Button><Button variant="secondary" href={`/admin/campaigns/${proposal.campaignId}`}><FolderKanban size={14} /> Campaign</Button><Button variant="primary" href={`/admin/chats?user=${encodeURIComponent(proposal.invitedByBrand ? proposal.creatorId : proposal.brandId)}`}><MessageCircle size={14} /> Chat</Button></div>} />
+      {noticeNode}
+      <Panel title="Application" hint="Saved application state and response details">
+        <div className={styles.panelBody}><div className={styles.detailGrid}>
+          <DetailItem label="Direction" value={proposal.invitedByBrand ? 'Brand invitation' : 'Creator application'} />
+          <DetailItem label="Creator quote" value={proposal.budget} />
+          <DetailItem label="Submitted" value={formatCampaignDeadline(proposal.submittedAt)} />
+          <DetailItem label="Last updated" value={formatCampaignDeadline(proposal.updated)} />
+          <DetailItem label="Completed" value={formatCampaignDeadline(proposal.completedAt)} />
+          <DetailItem label="Contact shared" value={proposal.contactShared ? 'Yes' : 'No'} />
+          {proposal.rejectionReason && <DetailItem label="Decline reason" value={proposal.rejectionReason} />}
+          {proposal.status === 'Declined' && <DetailItem label="May reapply" value={proposal.allowReapply ? 'Yes' : 'No'} />}
+          <DetailItem label="Application message" value={proposal.message || 'Not provided'} />
+        </div></div>
+      </Panel>
+      {responseFields.length > 0 && <Panel title="Application responses" hint="Answers saved with this application"><div className={styles.panelBody}><div className={styles.detailGrid}>{responseFields.map(([key, value]) => <DetailItem key={key} label={proposalLabel(key)} value={proposalValue(value)} />)}</div></div></Panel>}
+      <Panel title="Campaign details" hint="Current campaign record linked to this application">
+        <div className={styles.panelBody}><div className={styles.detailGrid}>
+          <DetailItem label="Campaign description" value={proposal.campaignDetails.description || 'Not provided'} />
+          <DetailItem label="Category" value={proposal.campaignDetails.category || 'Not set'} />
+          <DetailItem label="Brand budget" value={proposal.campaignDetails.budget || 'Not set'} />
+          <DetailItem label="Deadline" value={formatCampaignDeadline(proposal.campaignDetails.deadlineAt)} />
+          <DetailItem label="Target locations" value={proposal.campaignDetails.targetLocations.join(', ') || 'Not specified'} />
+          <DetailItem label="Platforms" value={proposal.campaignDetails.platforms.join(', ') || 'Not specified'} />
+          <DetailItem label="Deliverables" value={proposal.campaignDetails.deliverables || 'Not provided'} />
+          <DetailItem label="Requirements" value={proposal.campaignDetails.requirements.join(' · ') || 'Not provided'} />
+        </div></div>
+      </Panel>
+      <Panel title="Attached media" hint={`${proposal.media?.length ?? 0} file(s) saved with this application`}><MediaFiles files={proposal.media} /></Panel>
+      <Panel title="Application history" hint="Recorded status changes from the database"><div className={styles.activityList}>{proposal.history.length ? proposal.history.map((event) => <ActivityItem key={event.id} dot={event.status === 'Declined' ? 'red' : event.status === 'Accepted' || event.status === 'Completed' ? 'green' : 'orange'} action={`${event.status} · ${event.invitedByBrand ? 'Brand invitation' : 'Creator application'}`} target={`${event.actorRole}${event.rejectionReason ? ` · ${event.rejectionReason}` : ''}`} time={formatCampaignDeadline(event.occurredAt)} />) : <EmptyState icon={Activity} title="No status history" description="No status-change events were recorded for this application." />}</div></Panel>
+      {confirmation}
+    </div>;
+  }
   return <div className={styles.page}><PageHeader eyebrow={meta[section]?.eyebrow ?? 'Admin'} title={meta[section]?.title ?? 'Detail'} description="This detail view is ready for the corresponding service data." action={backAction} /><EmptyState icon={meta[section]?.icon ?? Activity} title="Detail view ready" description="The list view is available now." /></div>;
 }
 
@@ -536,8 +692,8 @@ export function AdminUserWorkspacePage({ id, section }: { id: string; section: U
   const { role, ready } = useAdminSession();
   const isOwner = role === 'Owner';
   const user = snapshot?.users.find((item) => item.id === id);
-  const userProposals = snapshot && user ? snapshot.proposals.filter((item) => item.from === user.name || item.to === user.name) : [];
-  const userCampaigns = snapshot && user ? snapshot.campaigns.filter((item) => item.brand === user.name || userProposals.some((proposal) => proposal.campaign === item.title)) : [];
+  const userProposals = snapshot && user ? snapshot.proposals.filter((item) => item.creatorId === user.id || item.brandId === user.id) : [];
+  const userCampaigns = snapshot && user ? snapshot.campaigns.filter((item) => item.brandId === user.id || userProposals.some((proposal) => proposal.campaignId === item.id)) : [];
   const userActivity: ActivityEntry[] = user ? [
     { id: `user-${user.id}-profile`, actor: 'Account', action: 'Account created', target: user.name, time: user.joined, tone: 'blue' },
     ...userCampaigns.map((item) => ({ id: `user-${user.id}-campaign-${item.id}`, actor: 'Marketplace', action: `${item.status} campaign`, target: item.title, time: item.updated, tone: 'blue' as const })),
@@ -559,7 +715,7 @@ export function AdminUserWorkspacePage({ id, section }: { id: string; section: U
     { key: 'status', label: 'Status', render: (item) => <Status value={item.status} /> },
     { key: 'proposals', label: 'Proposals', render: (item) => item.proposals },
     { key: 'media', label: 'Media', render: (item) => item.media?.length ? `${item.media.length} files` : 'None' },
-    { key: 'actions', label: '', locked: true, render: (item) => <div className={styles.rowActions}><Button variant="ghost" href={`/admin/campaigns/${item.id}`}><Eye size={14} /> View</Button>{item.status !== 'Archived' && <Button variant="ghost" onClick={() => setPendingAction({ title: 'Close this campaign?', description: 'The campaign will be archived and will stop accepting new marketplace activity.', confirmLabel: 'Close campaign', danger: true, successMessage: 'Campaign closed and archived.', run: () => updateCampaignStatus(item.id, 'Archived') })}>Close</Button>}{item.status !== 'Private' && item.status !== 'Archived' && <Button variant="ghost" onClick={() => setPendingAction({ title: 'Suspend this campaign?', description: 'The campaign will become private until an owner reopens it.', confirmLabel: 'Suspend campaign', danger: true, successMessage: 'Campaign suspended and made private.', run: () => updateCampaignStatus(item.id, 'Private') })}>Suspend</Button>}</div> },
+    { key: 'actions', label: 'Actions', locked: true, render: (item) => { const hide = item.status === 'Published' || item.status === 'Active'; return <div className={styles.campaignActions}><Button variant="ghost" href={`/admin/campaigns/${item.id}`}><Eye size={14} /> View</Button>{item.status !== 'Archived' && <Button variant="ghost" onClick={() => setPendingAction({ title: hide ? 'Hide this campaign?' : 'Archive this campaign?', description: hide ? 'It will disappear from the public marketplace. Existing applications remain saved.' : 'It will be archived and stop accepting new marketplace activity. Existing applications remain saved.', confirmLabel: hide ? 'Hide campaign' : 'Archive campaign', danger: !hide, successMessage: hide ? 'Campaign hidden from the marketplace.' : 'Campaign archived.', run: () => updateCampaignStatus(item.id, hide ? 'Private' : 'Archived') })}>{hide ? <><EyeOff size={14} /> Hide</> : <><Archive size={14} /> Archive</>}</Button>}</div>; } },
   ];
   const proposalTableColumns: Column<Proposal>[] = [
     { key: 'proposal', label: 'Proposal', locked: true, render: (item) => <div className={styles.entity}><span className={`${styles.statIcon} ${styles.statOrange}`}><FileCheck2 size={15} /></span><div><div className={styles.entityName}>{item.title}</div><div className={styles.entityMeta}>{item.campaign}</div></div></div> },
@@ -612,7 +768,7 @@ function NotificationsView({ data, campaigns, proposals, initialUserId }: { data
   const [message, setMessage] = useState('');
   const [actionLabel, setActionLabel] = useState('');
   const [actionUrl, setActionUrl] = useState('');
-  const [channel, setChannel] = useState<'All' | 'In-app' | 'Push' | 'Email' | 'WhatsApp'>('In-app');
+  const [channel, setChannel] = useState<'All' | 'In-app' | 'In-chat' | 'Push' | 'Email' | 'WhatsApp'>('In-app');
   const [history, setHistory] = useState<AdminNotificationRecord[]>([]);
   const [historyError, setHistoryError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -631,7 +787,7 @@ function NotificationsView({ data, campaigns, proposals, initialUserId }: { data
   const followerMatches = (value: string) => { const amount = Number.parseFloat(value.replace(/[^0-9.]/g, '')) || 0; return followers === 'All' || (followers === 'Under 10K' && amount < 10) || (followers === '10K–50K' && amount >= 10 && amount <= 50) || (followers === '50K+' && amount > 50) || (followers === 'Brand accounts' && value === '—'); };
   const budgetMatches = (user: AdminUser) => {
     if (budget === 'All') return true;
-    const values = [...campaigns.filter((item) => item.brand === user.name).map((item) => item.budget), ...proposals.filter((item) => item.from === user.name || item.to === user.name).map((item) => item.budget)].flatMap((value) => Array.from(value.toLowerCase().replace(/,/g, '').matchAll(/(\d+(?:\.\d+)?)(k|l)?/g)).map((match) => { const amount = Number(match[1]); return match[2] === 'l' ? amount * 100 : match[2] === 'k' ? amount : amount > 1000 ? amount / 1000 : amount; }));
+    const values = [...campaigns.filter((item) => item.brandId === user.id).map((item) => item.budget), ...proposals.filter((item) => item.creatorId === user.id || item.brandId === user.id).map((item) => item.budget)].flatMap((value) => Array.from(value.toLowerCase().replace(/,/g, '').matchAll(/(\d+(?:\.\d+)?)(k|l)?/g)).map((match) => { const amount = Number(match[1]); return match[2] === 'l' ? amount * 100 : match[2] === 'k' ? amount : amount > 1000 ? amount / 1000 : amount; }));
     const maximum = Math.max(...values, 0);
     return budget === 'Under ₹50K' ? maximum > 0 && maximum < 50 : budget === '₹50K–₹1L' ? maximum >= 50 && maximum <= 100 : maximum > 100;
   };
@@ -661,12 +817,21 @@ function NotificationsView({ data, campaigns, proposals, initialUserId }: { data
     if (actionUrl.trim() && !/^https:\/\//i.test(actionUrl.trim())) { setNotice('Action links must use HTTPS.'); return; }
     setBusy(true);
     try {
-      const channels = channel === 'All' ? ['PUSH', 'EMAIL', 'WHATSAPP'] as const : channel === 'Email' ? ['EMAIL'] as const : channel === 'WhatsApp' ? ['WHATSAPP'] as const : ['PUSH'] as const;
-      const result = await sendAdminNotifications({ userIds: recipients.map((user) => user.id), title: title.trim(), body: message.trim(), channels: [...channels], data: { ...(actionLabel.trim() ? { actionLabel: actionLabel.trim() } : {}), ...(actionUrl.trim() ? { actionUrl: actionUrl.trim() } : {}) } });
+      const userIds = recipients.map((user) => user.id);
+      const data = { ...(actionLabel.trim() ? { actionLabel: actionLabel.trim() } : {}), ...(actionUrl.trim() ? { actionUrl: actionUrl.trim() } : {}) };
+      if (channel === 'In-chat') {
+        const result = await sendAdminChatBroadcast(userIds, title.trim(), message.trim(), data);
+        await reloadHistory();
+        setTitle(''); setMessage(''); setActionLabel(''); setActionUrl(''); setSelectedIds(result.failedUserIds); setDrawerOpen(result.failed > 0);
+        setNotice(`Posted in Brandly chat for ${result.sent}/${result.requested} recipients${result.failed ? ` · ${result.failed} failed; only failed recipients remain selected` : ''}.`);
+        return;
+      }
+      const channels = channel === 'All' ? ['IN_APP', 'PUSH', 'EMAIL', 'WHATSAPP'] as const : channel === 'In-app' ? ['IN_APP'] as const : channel === 'Email' ? ['EMAIL'] as const : channel === 'WhatsApp' ? ['WHATSAPP'] as const : ['PUSH'] as const;
+      const result = await sendAdminNotifications({ userIds, title: title.trim(), body: message.trim(), channels: [...channels], data });
       await reloadHistory();
       setTitle(''); setMessage(''); setActionLabel(''); setActionUrl(''); setSelectedIds([]); setDrawerOpen(false);
       const { delivered, accepted, pending, failed: deliveryFailed } = result.delivery;
-      const summary = `Saved for ${result.completed}/${result.requested} recipients · delivery: ${delivered} delivered, ${accepted} accepted by push, ${pending} pending, ${deliveryFailed} failed`;
+      const summary = `Saved for ${result.completed}/${result.requested} recipients · delivery: ${delivered} in-app/delivered, ${accepted} accepted by push, ${pending} pending, ${deliveryFailed} failed`;
       setNotice(result.failed ? `${summary} · ${result.failed} recipients failed to save` : summary);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Notification send failed.');
@@ -675,7 +840,7 @@ function NotificationsView({ data, campaigns, proposals, initialUserId }: { data
   return <div className={styles.notificationWorkspace}>
     {notice && <div className={styles.notice}><CheckCircle2 size={16} />{notice}</div>}
     <Panel title="Choose recipients" hint={`${filtered.length} users match · ${selectedRecipients.length ? `${selectedRecipients.length} selected` : 'broadcast mode'}`} action={<div className={styles.headerActions}><Button variant="ghost" onClick={selectAll} disabled={!filtered.length}>Select all</Button><Button variant="ghost" onClick={clearSelection} disabled={!selectedIds.length}>Clear selection</Button><Button variant="primary" onClick={() => recipients.length ? setDrawerOpen(true) : setNotice('No matching recipients found for the current conditions.')}><Send size={14} /> {selectedRecipients.length ? 'Send to selected' : 'Send to all matching'}</Button></div>}><DataToolbar query={query} setQuery={setQuery} filter={role} setFilter={setRole} filterLabel="Account type" options={['All', 'Creator', 'Brand']} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'status', label: 'Account status', value: status, options: ['All', 'Active', 'Suspended', 'Pending review'], onChange: setStatus }, { key: 'social-platform', label: 'Social media platform', value: socialPlatform, options: socialPlatforms, onChange: setSocialPlatform }, { key: 'social-verification', label: 'Social account verification', value: socialVerification, options: ['All', 'Verified social', 'Unverified social', 'No social account'], onChange: setSocialVerification }, { key: 'content-type', label: 'Content type', value: contentType, options: contentTypes, onChange: setContentType }, { key: 'location', label: 'Location', value: location, options: locations, onChange: setLocation, searchable: true }, { key: 'category', label: 'Category', value: category, options: categories, onChange: setCategory }, { key: 'followers', label: 'Audience / followers', value: followers, options: ['All', 'Brand accounts', 'Under 10K', '10K–50K', '50K+'], onChange: setFollowers }, { key: 'budget', label: 'Linked budget', value: budget, options: ['All', 'Under ₹50K', '₹50K–₹1L', '₹1L+'], onChange: setBudget }]} /><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={Users} title="No recipients found" description="Adjust the account type, social account, content type, category, location, audience, budget, status, or search filters." />} /><Pagination {...pagination} total={filtered.length} /></Panel>
-    <AdminDrawer open={drawerOpen} onClose={() => !busy && setDrawerOpen(false)} title="Send notification" description={`Send to ${recipients.length} active accounts. Maximum 100 recipients per send.`}><div className={styles.drawerForm}><div className={styles.bulkSummary}><span className={styles.statIcon + ' ' + styles.statBlue}><Users size={15} /></span><div><strong>{recipients.length} recipients ready</strong><small>{selectedRecipients.length ? 'Manual selection' : 'First matching accounts'} · {audienceLabel}</small></div></div><div className={styles.recipientPreview}>{recipients.slice(0, 6).map((user) => <span className={styles.recipientChip} key={user.id}><Avatar label={user.avatar} />{user.name}</span>)}{recipients.length > 6 && <span className={styles.recipientMore}>+{recipients.length - 6} more</span>}</div><Field label="Delivery channel"><select className={styles.select} value={channel} onChange={(event) => setChannel(event.target.value as 'All' | 'In-app' | 'Push' | 'Email' | 'WhatsApp')}><option value="In-app">In-app / push</option><option value="All">All configured channels</option><option value="Push">Push</option><option value="Email">Email</option><option value="WhatsApp">WhatsApp</option></select></Field><Field label="Title"><input className={styles.input} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Notification title" maxLength={160} /></Field><Field label="Message"><textarea className={styles.textarea} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Write the notification message." maxLength={2000} /></Field><div className={styles.formGrid}><Field label="Action button label"><input className={styles.input} value={actionLabel} onChange={(event) => setActionLabel(event.target.value)} placeholder="Optional" /></Field><Field label="Action link"><input className={styles.input} type="url" value={actionUrl} onChange={(event) => setActionUrl(event.target.value)} placeholder="https://…" /></Field></div><div className={styles.drawerActions}><Button variant="secondary" onClick={() => setDrawerOpen(false)} disabled={busy}>Cancel</Button><Button variant="primary" onClick={submit} disabled={busy || !recipients.length}>{busy ? 'Sending...' : <><Send size={14} /> Send to {recipients.length}</>}</Button></div></div></AdminDrawer>
+    <AdminDrawer open={drawerOpen} onClose={() => !busy && setDrawerOpen(false)} title="Send notification" description={`Send to ${recipients.length} active accounts. Maximum 100 recipients per send.`}><div className={styles.drawerForm}><div className={styles.bulkSummary}><span className={styles.statIcon + ' ' + styles.statBlue}><Users size={15} /></span><div><strong>{recipients.length} recipients ready</strong><small>{selectedRecipients.length ? 'Manual selection' : 'First matching accounts'} · {audienceLabel}</small></div></div><div className={styles.recipientPreview}>{recipients.slice(0, 6).map((user) => <span className={styles.recipientChip} key={user.id}><Avatar label={user.avatar} />{user.name}</span>)}{recipients.length > 6 && <span className={styles.recipientMore}>+{recipients.length - 6} more</span>}</div><Field label="Delivery channel"><select className={styles.select} value={channel} onChange={(event) => setChannel(event.target.value as 'All' | 'In-app' | 'In-chat' | 'Push' | 'Email' | 'WhatsApp')}><option value="In-app">In-app inbox only</option><option value="In-chat">In-chat message</option><option value="All">All notification channels</option><option value="Push">Push only</option><option value="Email">Email</option><option value="WhatsApp">WhatsApp</option></select></Field><Field label="Title"><input className={styles.input} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Notification title" maxLength={160} /></Field><Field label="Message"><textarea className={styles.textarea} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Write the notification message." maxLength={2000} /></Field><div className={styles.formGrid}><Field label="Action button label"><input className={styles.input} value={actionLabel} onChange={(event) => setActionLabel(event.target.value)} placeholder="Optional" /></Field><Field label="Action link"><input className={styles.input} type="url" value={actionUrl} onChange={(event) => setActionUrl(event.target.value)} placeholder="https://…" /></Field></div><div className={styles.drawerActions}><Button variant="secondary" onClick={() => setDrawerOpen(false)} disabled={busy}>Cancel</Button><Button variant="primary" onClick={submit} disabled={busy || !recipients.length}>{busy ? 'Sending...' : <><Send size={14} /> Send to {recipients.length}</>}</Button></div></div></AdminDrawer>
     <Panel title="Latest notification logs" hint={`Latest ${history.length} records returned by the API · showing up to 10`} action={<Button variant="ghost" href="/admin/notification-logs">View all logs <ArrowUpRight size={14} /></Button>}>{historyError ? <div className={styles.panelBody}><div className={styles.errorInline} role="alert">{historyError}</div><Button variant="secondary" onClick={() => void reloadHistory()}><Activity size={14} /> Retry logs</Button></div> : <div className={styles.compactList}>{history.length ? history.slice(0, 10).map((item) => <div className={styles.compactItem} key={item.id}><span className={styles.statIcon + ' ' + styles.statBlue}><Bell size={14} /></span><div><strong>{item.title}</strong><span>{item.userName} · {item.type} · {item.channel} · {item.createdAt}{item.actionLabel ? ` · CTA: ${item.actionLabel}` : ''}</span><p className={styles.notificationMessage}>{item.message}</p>{item.lastDeliveryError && <p className={styles.errorInline}>{item.lastDeliveryError}</p>}</div><div><Status value={notificationDeliveryStatus(item)} /><small>{item.read ? 'Read' : 'Unread'}</small></div></div>) : <EmptyState icon={Bell} title="No notification logs" description="App and admin notification records will appear here." />}</div>}</Panel>
   </div>;
 }
@@ -683,32 +848,46 @@ function NotificationsView({ data, campaigns, proposals, initialUserId }: { data
 function NotificationLogsView() {
   const [items, setItems] = useState<AdminNotificationRecord[]>([]);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('All');
   const [source, setSource] = useState('All');
   const [channel, setChannel] = useState('All');
+  const [types, setTypes] = useState<string[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const reload = useCallback(async () => {
     setError('');
-    try { setItems(await getAdminNotifications()); }
+    setLoading(true);
+    try {
+      const channelValue = channel === 'In-app' ? 'IN_APP' : channel === 'Push' ? 'PUSH' : channel === 'Email' ? 'EMAIL' : channel === 'WhatsApp' ? 'WHATSAPP' : undefined;
+      const result = await getAdminNotificationLogs({ take: pageSize, offset: (page - 1) * pageSize, search: query.trim() || undefined, type: filter === 'All' ? undefined : filter, source: source === 'All' ? undefined : source as 'App' | 'Admin', channel: channelValue });
+      setItems(result.items); setTotal(result.total); setTypes(result.types);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Notification logs could not be loaded.'); }
-  }, []);
-  useEffect(() => { void reload(); }, [reload]);
-  const types = ['All', ...Array.from(new Set(items.map((item) => item.type)))];
-  const filtered = items.filter((item) => `${item.title} ${item.message} ${item.userName} ${item.type}`.toLowerCase().includes(query.toLowerCase()) && (filter === 'All' || item.type === filter) && (source === 'All' || item.source === source) && (channel === 'All' || item.channel === channel));
+    finally { setLoading(false); }
+  }, [channel, filter, page, pageSize, query, source]);
+  useEffect(() => { const timer = setTimeout(() => void reload(), query ? 250 : 0); return () => clearTimeout(timer); }, [reload, query]);
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const pagination = { page, pageCount, pageSize, pageItems: items, setPage, setPageSize: (value: Parameters<typeof setPageSize>[0]) => { setPage(1); setPageSize(value); } };
+  const changeFilter = (value: string) => { setPage(1); setFilter(value); };
+  const changeSource = (value: string) => { setPage(1); setSource(value); };
+  const changeChannel = (value: string) => { setPage(1); setChannel(value); };
+  const openExternalAction = (url: string) => /^https:\/\//i.test(url);
   const columns: Column<AdminNotificationRecord>[] = [
-    { key: 'notification', label: 'Notification', locked: true, render: (item) => <div className={styles.entity}><span className={styles.statIcon + ' ' + styles.statBlue}><Bell size={15} /></span><div><div className={styles.entityName}>{item.title}</div><div className={styles.entityMeta}>{item.message}</div></div></div> },
+    { key: 'notification', label: 'Notification', locked: true, render: (item) => <div className={styles.entity}><span className={styles.statIcon + ' ' + styles.statBlue}>{item.mediaType === 'image' ? <ImageIcon size={15} /> : item.mediaType === 'video' ? <Video size={15} /> : item.adminChat || item.type === 'CHAT_MESSAGE' ? <MessageCircle size={15} /> : <Bell size={15} />}</span><div className={styles.notificationLogCopy}><div className={styles.entityName}>{item.title}</div><div className={styles.entityMeta}>{item.message}</div>{item.mediaUri && <a className={styles.notificationAttachment} href={resolveAdminMediaUrl(item.mediaUri)} target="_blank" rel="noreferrer">{item.mediaType === 'image' ? <img src={resolveAdminMediaUrl(item.mediaUri)} alt={item.mediaName || 'Notification attachment'} onError={(event) => event.currentTarget.remove()} /> : item.mediaType === 'video' ? <Video size={15} /> : <Paperclip size={15} />}<span>{item.mediaName || (item.mediaType === 'image' ? 'Image attachment' : item.mediaType === 'video' ? 'Video attachment' : 'File attachment')}</span><ExternalLink size={12} /></a>}</div></div> },
     { key: 'recipient', label: 'Recipient', render: (item) => <Button variant="ghost" href={`/admin/users/${item.userId}`}><UserRound size={14} /> {item.userName}</Button> },
     { key: 'type', label: 'Type', render: (item) => item.type },
     { key: 'source', label: 'Source', render: (item) => item.source },
     { key: 'channel', label: 'Channel', render: (item) => item.channel },
-    { key: 'action', label: 'Action', render: (item) => item.actionLabel && item.actionUrl ? <a className={styles.linkInline} href={item.actionUrl} target="_blank" rel="noreferrer">{item.actionLabel} <ExternalLink size={12} /></a> : 'None' },
+    { key: 'action', label: 'Action', render: (item) => item.adminChat || item.type === 'CHAT_MESSAGE' ? <Button variant="ghost" href={`/admin/chats?user=${encodeURIComponent(item.userId)}`}><MessageCircle size={14} /> Open chat</Button> : item.actionLabel && item.actionUrl && openExternalAction(item.actionUrl) ? <a className={styles.linkInline} href={item.actionUrl} target="_blank" rel="noreferrer">{item.actionLabel} <ExternalLink size={12} /></a> : 'None' },
     { key: 'delivery', label: 'Delivery', render: (item) => <Status value={notificationDeliveryStatus(item)} /> },
     { key: 'read', label: 'Inbox', render: (item) => <Status value={item.read ? 'Read' : 'Unread'} /> },
     { key: 'created', label: 'Time', render: (item) => item.createdAt },
   ];
   const [visibleColumns, setVisibleColumns] = useColumns('notification-logs', columns);
-  const pagination = usePagination(filtered, 10, `${query}|${filter}|${source}|${channel}`);
-  return <Panel title="Notification logs" hint={`${filtered.length} matches in the latest ${items.length} records · 10 per page`} action={<Button variant="primary" href="/admin/notifications"><Send size={14} /> Send notification</Button>}>{error ? <div className={styles.panelBody}><div className={styles.errorInline} role="alert">{error}</div><Button variant="secondary" onClick={() => void reload()}><Activity size={14} /> Retry</Button></div> : <><DataToolbar query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} options={types} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'source', label: 'Source', value: source, options: ['All', 'App', 'Admin'], onChange: setSource }, { key: 'channel', label: 'Channel', value: channel, options: ['All', 'Push', 'Email', 'WhatsApp'], onChange: setChannel }]} /><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={Bell} title="No notification logs found" description="Try a different search or notification filter." />} /><Pagination {...pagination} total={filtered.length} /></>}</Panel>;
+  return <Panel title="Notification logs" hint={`${total} matching records · page ${page} of ${pageCount}`} action={<Button variant="primary" href="/admin/notifications"><Send size={14} /> Send notification</Button>}>{error ? <div className={styles.panelBody}><div className={styles.errorInline} role="alert">{error}</div><Button variant="secondary" onClick={() => void reload()}><Activity size={14} /> Retry</Button></div> : <><DataToolbar query={query} setQuery={(value) => { setPage(1); setQuery(value); }} filter={filter} setFilter={changeFilter} options={['All', ...types]} columns={columns} visibleColumns={visibleColumns} setVisibleColumns={setVisibleColumns} extraFilters={[{ key: 'source', label: 'Source', value: source, options: ['All', 'App', 'Admin'], onChange: changeSource }, { key: 'channel', label: 'Channel', value: channel, options: ['All', 'In-app', 'Push', 'Email', 'WhatsApp'], onChange: changeChannel }]} /><DataTable columns={columns} visibleColumns={visibleColumns} items={pagination.pageItems} empty={<EmptyState icon={Bell} title={loading ? 'Loading notification logs' : 'No notification logs found'} description={loading ? 'Fetching the selected page.' : 'Try a different search or notification filter.'} />} /><Pagination {...pagination} total={total} /></>}</Panel>;
 }
 
 export function AdminSectionPage({ section }: { section: string }) {
@@ -729,9 +908,8 @@ export function AdminSectionPage({ section }: { section: string }) {
   }
   return <div className={styles.page}><PageHeader eyebrow={config.eyebrow} title={config.title} description={config.description} />
     {section === 'users' && <UsersView data={snapshot.users} onToast={setToast} canSuspend={isOwner} />}
-    {section === 'campaigns' && <CampaignsView data={snapshot.campaigns} users={snapshot.users} />}
-    {section === 'proposals' && <ProposalsView data={snapshot.proposals} users={snapshot.users} />}
-    {section === 'categories' && <CategoriesView data={snapshot.categories} />}
+    {section === 'campaigns' && <CampaignsView data={snapshot.campaigns} users={snapshot.users} onToast={setToast} reload={reload} />}
+    {section === 'proposals' && <ProposalsView />}
     {section === 'app-settings' && <AppSettingsView onToast={setToast} />}
     {section === 'notifications' && <NotificationsView data={snapshot.users} campaigns={snapshot.campaigns} proposals={snapshot.proposals} initialUserId={searchParams.get('user') ?? undefined} />}
     {section === 'notification-logs' && <NotificationLogsView />}

@@ -48,7 +48,7 @@ export function NotificationView({
   const styles = makeStyles(theme);
   const visibleNotifications = notifications.filter(
     (notification) =>
-      !notification.read && notificationSettings[notification.category],
+      !notification.read && (notification.category === "reminders" || notificationSettings[notification.category]),
   );
   return (
     <ScrollView
@@ -109,6 +109,7 @@ export function NotificationView({
               />
             </View>
             <View style={styles.notificationCopy}>
+              {notification.brandName ? <Text style={styles.notificationBrand}>{notification.brandName.toUpperCase()} UPDATE</Text> : null}
               <Text
                 style={[
                   styles.notificationTitle,
@@ -122,6 +123,7 @@ export function NotificationView({
                 {notification.mediaType === "image" ? <ExpoImage source={{ uri: notification.mediaUri }} contentFit="cover" style={styles.notificationMediaImage as ImageStyle} accessibilityLabel={notification.mediaName || "Image attachment preview"} /> : <View style={styles.notificationMediaIcon}><AppIcon name={notification.mediaType === "video" ? "videocam-outline" : "document-text-outline"} size={21} color={theme.colors.primary} /></View>}
                 <Text numberOfLines={2} style={styles.notificationMediaName}>{notification.mediaName || (notification.mediaType === "video" ? "Video attachment" : notification.mediaType === "file" ? "File attachment" : "Photo attachment")}</Text>
               </View> : null}
+              {notification.actionLabel && notification.actionUrl ? <View style={styles.notificationCta}><AppIcon name="open-outline" size={14} color={theme.colors.primary} /><Text style={styles.notificationCtaText}>{notification.actionLabel}</Text></View> : null}
               <Text style={styles.notificationTime}>{notification.time}</Text>
             </View>
             <View style={styles.notificationActions}>
@@ -214,6 +216,9 @@ export function InboxView({
         ? inboxItems.filter((item) => "participantName" in item && Boolean(item.unreadCount))
         : inboxItems;
   const sortedItems = [...visibleItems].sort((left, right) => {
+    const leftPinned = "participantName" in left && Boolean(left.favorite);
+    const rightPinned = "participantName" in right && Boolean(right.favorite);
+    if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
     const leftDate = new Date("participantName" in left ? left.updatedAt : left.submittedAt).getTime();
     const rightDate = new Date("participantName" in right ? right.updatedAt : right.submittedAt).getTime();
     return (Number.isFinite(rightDate) ? rightDate : 0) - (Number.isFinite(leftDate) ? leftDate : 0);
@@ -273,7 +278,7 @@ export function InboxView({
             <Avatar initials={conversation.participantInitials} uri={conversation.participantAvatarUrl} />
             {conversation.online ? <View style={styles.conversationOnline} /> : null}
           </View>
-          <View style={styles.flex}><View style={styles.conversationTop}><View style={styles.conversationNameRow}><Text numberOfLines={1} style={styles.conversationName}>{conversation.participantName}</Text>{conversation.favorite ? <AppIcon name="star" size={14} color={theme.colors.secondary} /> : null}{conversation.muted ? <AppIcon name="notifications-off-outline" size={14} color={theme.colors.textSecondary} /> : null}</View><Pill label={conversation.adminChat ? "Open" : conversation.status === "Declined" ? "Rejected" : conversation.status} accent={conversation.adminChat || conversation.status === "Accepted"} /></View><Text numberOfLines={1} style={styles.message}>{conversation.preview || conversation.briefTitle}</Text></View>
+          <View style={styles.flex}><View style={styles.conversationTop}><View style={styles.conversationNameRow}><Text numberOfLines={1} style={styles.conversationName}>{conversation.participantName}</Text>{conversation.favorite ? <AppIcon name="pin" size={14} color={theme.colors.secondary} /> : null}{conversation.muted ? <AppIcon name="notifications-off-outline" size={14} color={theme.colors.textSecondary} /> : null}</View><Pill label={conversation.adminChat ? "Open" : conversation.status === "Declined" ? "Rejected" : conversation.status} accent={conversation.adminChat || conversation.status === "Accepted"} /></View><Text numberOfLines={1} style={styles.message}>{conversation.preview || conversation.briefTitle}</Text></View>
           {conversation.unreadCount ? <View style={styles.conversationUnread}><Text style={styles.conversationUnreadText}>{conversation.unreadCount > 9 ? "9+" : conversation.unreadCount}</Text></View> : null}
         </Pressable>;
         }
@@ -301,8 +306,8 @@ export function InboxView({
           </View>
           <View style={styles.notificationList}>
             <Pressable accessibilityRole="button" accessibilityLabel={selectedConversation?.favorite ? "Remove from favorites" : "Add to favorites"} onPress={() => runPreferenceAction((conversation) => onToggleFavorite?.(conversation))} style={({ pressed }) => [styles.notificationRow, pressed && styles.pressed]}>
-              <View style={styles.notificationIcon}><AppIcon name={selectedConversation?.favorite ? "star" : "star-outline"} size={20} color={theme.colors.secondary} /></View>
-              <View style={styles.notificationCopy}><Text style={styles.notificationTitle}>{selectedConversation?.favorite ? "Remove from favorites" : "Add to favorites"}</Text><Text style={styles.notificationBody}>Keep this chat at the top of your list.</Text></View>
+              <View style={styles.notificationIcon}><AppIcon name={selectedConversation?.favorite ? "pin" : "pin-outline"} size={20} color={theme.colors.secondary} /></View>
+              <View style={styles.notificationCopy}><Text style={styles.notificationTitle}>{selectedConversation?.favorite ? "Unpin chat" : "Pin chat"}</Text><Text style={styles.notificationBody}>Keep this conversation at the top of your list.</Text></View>
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel={selectedConversation?.muted ? "Unmute chat notifications" : "Mute chat notifications"} onPress={() => runPreferenceAction((conversation) => onToggleMute?.(conversation))} style={({ pressed }) => [styles.notificationRow, pressed && styles.pressed]}>
               <View style={styles.notificationIcon}><AppIcon name={selectedConversation?.muted ? "notifications-outline" : "notifications-off-outline"} size={20} color={theme.colors.primary} /></View>

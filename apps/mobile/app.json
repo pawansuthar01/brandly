@@ -2,12 +2,12 @@
   "expo": {
     "name": "Brandly",
     "slug": "brandly-marketplace",
-    "version": "0.2.31",
+    "version": "0.2.32",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "com.brandly.marketplace",
-      "versionCode": 46,
+      "versionCode": 47,
       "permissions": [
         "SCHEDULE_EXACT_ALARM",
         "USE_EXACT_ALARM",

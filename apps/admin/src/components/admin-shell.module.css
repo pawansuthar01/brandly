@@ -36,6 +36,9 @@
 .mainTheme { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .mainTheme > .topbar { flex: 0 0 72px; }
 .contentTheme { display: flex; flex-direction: column; flex: 1; width: 100%; max-width: none; min-height: 0; overflow: hidden; padding: 12px 16px; }
+.mainChat { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.mainChat > .topbar { flex: 0 0 72px; }
+.contentChat { display: flex; flex: 1; width: 100%; max-width: none; min-height: 0; overflow: hidden; padding: 12px 16px; }
 .mobileOverlay { display: none; }
 .notificationPanel { position: absolute; z-index: 25; top: 62px; right: 34px; width: min(370px, calc(100vw - 28px)); overflow: hidden; border: 1px solid var(--color-border); border-radius: 14px; background: var(--color-surface); box-shadow: var(--shadow-lg); }
 .notificationHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px 17px; border-bottom: 1px solid var(--color-border); }
@@ -77,4 +80,5 @@
   .topbarLeft, .topbarRight { gap: 7px; }
   .content { padding: 22px 14px; }
   .notificationPanel { top: 57px; right: 14px; }
+  .mainChat > .topbar { flex-basis: 64px; }
 }

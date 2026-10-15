@@ -181,6 +181,7 @@ enum SocialVerificationStatus {
 }
 
 enum NotificationChannel {
+  IN_APP
   PUSH
   WHATSAPP
   EMAIL
@@ -208,6 +209,7 @@ model User {
   onboardingCompletedAt DateTime?             @map("onboarding_completed_at")
   createdAt             DateTime              @default(now()) @map("created_at")
   updatedAt             DateTime              @updatedAt @map("updated_at")
+  notificationPreferences Json?               @map("notification_preferences")
   profile               UserProfile?
   socialAccounts        SocialAccount[]
   contentVerifications  ContentVerification[]
@@ -348,6 +350,7 @@ model SocialAccount {
   syncStatus         String                   @default("IDLE") @map("sync_status")
   syncError          String?                  @map("sync_error")
   lastSyncedAt       DateTime?                @map("last_synced_at")
+  followerCountVerifiedAt DateTime?            @map("follower_count_verified_at")
   verificationMethod String?                  @map("verification_method")
   verificationStatus SocialVerificationStatus @default(UNVERIFIED) @map("verification_status")
   verifiedAt         DateTime?                @map("verified_at")
@@ -427,6 +430,7 @@ model Notification {
   user                 User                @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt, createdAt])
+  @@index([createdAt, channel])
   @@index([channel, deliveryStatus, nextReceiptCheckAt])
   @@map("notifications")
 }
@@ -554,6 +558,8 @@ model Task {
   recipients             TaskRecipient[]
 
   @@index([createdById, createdAt])
+  @@index([createdAt])
+  @@index([completedAt])
   @@index([brandId, dueAt])
   @@index([creatorId, dueAt])
   @@index([reminderEnabled, reminderStatus, dueAt])
@@ -660,6 +666,7 @@ model Campaign {
   collaborationVideoUrl   String?               @map("collaboration_video_url")
   collaborationVideoLabel String?               @map("collaboration_video_label")
   applicationLimit        Int?                  @map("application_limit")
+  minimumFollowers        Int?                  @map("minimum_followers")
   approvalLimit           Int?                  @map("approval_limit")
   closeOnApplicationLimit Boolean               @default(true) @map("close_on_application_limit")
   closeOnApprovalLimit    Boolean               @default(true) @map("close_on_approval_limit")
@@ -671,6 +678,7 @@ model Campaign {
   applications            CampaignApplication[]
 
   @@index([brandId, status, updatedAt])
+  @@index([createdAt])
   @@index([status, deadlineAt])
   @@map("campaigns")
 }
@@ -701,6 +709,8 @@ model CampaignApplication {
 
   @@unique([campaignId, creatorId])
   @@index([creatorId, status, updatedAt])
+  @@index([submittedAt])
+  @@index([completedAt])
   @@index([campaignId, status, updatedAt])
   @@map("campaign_applications")
 }
@@ -776,6 +786,7 @@ model ChatMessage {
 
   @@unique([applicationId, senderId, clientMessageId])
   @@index([applicationId, createdAt, id])
+  @@index([createdAt])
   @@index([senderId, createdAt])
   @@index([taskId])
   @@index([campaignApplicationId])
@@ -802,14 +813,19 @@ model AdminChatMessage {
   clientMessageId String?              @map("client_message_id")
   text            String
   attachments     Json                 @default("[]")
+  replyToId       String?              @map("reply_to_id") @db.Uuid
   readAt          DateTime?            @map("read_at")
   createdAt       DateTime             @default(now()) @map("created_at")
   updatedAt       DateTime             @updatedAt @map("updated_at")
   conversation    AdminChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   sender          User                 @relation("AdminChatMessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  replyTo         AdminChatMessage?    @relation("AdminChatMessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies         AdminChatMessage[]   @relation("AdminChatMessageReplies")
 
   @@unique([conversationId, senderId, clientMessageId])
   @@index([conversationId, createdAt, id])
+  @@index([createdAt])
   @@index([senderId, createdAt])
+  @@index([replyToId])
   @@map("admin_chat_messages")
 }

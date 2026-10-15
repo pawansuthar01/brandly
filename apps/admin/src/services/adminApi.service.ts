@@ -1,4 +1,4 @@
-import type { AdminAppSettings, AdminSnapshot, AdminUser, Campaign, Category, VersionConfig } from '@/types/admin';
+import type { AdminAppSettings, AdminSnapshot, AdminUser, Campaign, CampaignApplicationsPage, ProposalDetail, ProposalPage, VersionConfig } from '@/types/admin';
 import { readAdminSession } from '@/lib/admin-auth';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ??
@@ -74,12 +74,26 @@ export function deleteAdminAppSettings(): Promise<AppSettingsResponse> {
 
 type AdminOverview = Pick<AdminSnapshot, 'users' | 'campaigns' | 'proposals'>;
 
+export type AdminAnalyticsPoint = { date: string; value: number };
+export type AdminAnalytics = {
+  period: { days: number; from: string; to: string; bucket: 'day' | 'month' };
+  summary: {
+    totalUsers: number; activeUsers: number; brands: number; creators: number; newUsers: number; previousNewUsers: number;
+    newCampaigns: number; previousCampaigns: number; applications: number; previousApplications: number;
+    acceptedApplications: number; completedApplications: number; paidAmount: number; paidCount: number;
+    previousPaidAmount: number; previousPaidCount: number; tasks: number; completedTasks: number;
+    chatMessages: number; notifications: number; registeredDevices: number; averageProfileCompletion: number;
+  };
+  trends: { users: AdminAnalyticsPoint[]; campaigns: AdminAnalyticsPoint[]; applications: AdminAnalyticsPoint[]; payments: AdminAnalyticsPoint[] };
+  breakdowns: { campaigns: Array<{ label: string; value: number }>; applications: Array<{ label: string; value: number }>; categories: Array<{ label: string; value: number }> };
+};
+
+export function getAdminAnalytics(days: 7 | 30 | 90 | 365) {
+  return request<AdminAnalytics>(`/admin/analytics?days=${days}`);
+}
+
 export async function getAdminSnapshot(): Promise<AdminSnapshot> {
-  const data = await request<AdminOverview>('/admin/overview?take=200');
-  const categoryCounts = new Map<string, number>();
-  data.campaigns.forEach((campaign) => categoryCounts.set(campaign.category, (categoryCounts.get(campaign.category) ?? 0) + 1));
-  const categories: Category[] = Array.from(categoryCounts.entries()).map(([name, usage]) => ({ id: name, name, group: 'Category', usage, status: 'Active' }));
-  return { ...data, categories };
+  return request<AdminOverview>('/admin/overview?take=200');
 }
 
 export function suspendUser(id: string, suspended: boolean, reason?: string): Promise<{ id: string; status: AdminUser['status'] }> {
@@ -90,26 +104,63 @@ export async function updateCampaignStatus(id: string, status: 'Archived' | 'Pri
   await request<{ id: string; status: Campaign['status'] }>(`/admin/campaigns/${encodeURIComponent(id)}/status`, { method: 'PATCH', body: JSON.stringify({ status: status.toUpperCase() }) });
 }
 
+export function getAdminCampaignApplications(id: string, take = 20, offset = 0): Promise<CampaignApplicationsPage> {
+  return request<CampaignApplicationsPage>(`/admin/campaigns/${encodeURIComponent(id)}/applications?take=${take}&offset=${offset}`);
+}
+
+export function getAdminProposals(input: { take: number; offset: number; query: string; status: string; media: string }): Promise<ProposalPage> {
+  const params = new URLSearchParams({ take: String(input.take), offset: String(input.offset), q: input.query, status: input.status, media: input.media });
+  return request<ProposalPage>(`/admin/proposals?${params}`);
+}
+
+export function getAdminProposal(id: string): Promise<ProposalDetail> {
+  return request<ProposalDetail>(`/admin/proposals/${encodeURIComponent(id)}`);
+}
+
 export type AdminNotificationRecord = {
   id: string; userId: string; userName: string; title: string; message: string; type: string;
-  source: 'App' | 'Admin'; channel: 'Push' | 'Email' | 'WhatsApp'; sentBy: string;
+  source: 'App' | 'Admin'; channel: 'In-app' | 'Push' | 'Email' | 'WhatsApp'; sentBy: string;
   createdAt: string; read: boolean; deliveryStatus?: string; deliveredAt?: string | null; lastDeliveryError?: string | null; actionLabel?: string; actionUrl?: string;
+  adminChat?: boolean; mediaUri?: string; mediaName?: string; mediaType?: 'image' | 'video' | 'file';
 };
 
-export function getAdminNotifications(): Promise<AdminNotificationRecord[]> {
-  return request('/notifications/admin/logs');
+export type AdminNotificationLogsPage = { items: AdminNotificationRecord[]; total: number; take: number; offset: number; types: string[] };
+export type AdminNotificationLogsQuery = { take?: number; offset?: number; search?: string; type?: string; source?: 'App' | 'Admin'; channel?: 'IN_APP' | 'PUSH' | 'EMAIL' | 'WHATSAPP' };
+
+export function getAdminNotificationLogs(query: AdminNotificationLogsQuery = {}): Promise<AdminNotificationLogsPage> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value));
+  return request(`/notifications/admin/logs?${params.toString()}`);
 }
 
-export function sendAdminNotifications(input: { userIds: string[]; title: string; body: string; channels: Array<'PUSH' | 'EMAIL' | 'WHATSAPP'>; data?: Record<string, string> }) {
-  return request<{ requested: number; completed: number; failed: number; delivery: { delivered: number; accepted: number; pending: number; failed: number } }>('/notifications/admin/send-bulk', { method: 'POST', body: JSON.stringify({ type: 'ADMIN_ANNOUNCEMENT', ...input }) });
+export async function getAdminNotifications(): Promise<AdminNotificationRecord[]> {
+  return (await getAdminNotificationLogs({ take: 100, offset: 0 })).items;
 }
 
-export async function sendAdminNotification(value: { userId: string; title: string; message: string; channel?: string; actionLabel?: string; actionUrl?: string }) {
-  return sendAdminNotifications({
+export function sendAdminNotifications(input: { userIds: string[]; title: string; body: string; channels: Array<'IN_APP' | 'PUSH' | 'EMAIL' | 'WHATSAPP'>; data?: Record<string, string>; type?: string }) {
+  return request<{ requested: number; completed: number; failed: number; completedRecipients: Array<{ userId: string; notificationId: string }>; delivery: { delivered: number; accepted: number; pending: number; failed: number } }>('/notifications/admin/send-bulk', { method: 'POST', body: JSON.stringify({ ...input, type: input.type ?? 'ADMIN_ANNOUNCEMENT' }) });
+}
+
+export async function sendAdminChatBroadcast(userIds: string[], title: string, body: string, data?: Record<string, string>) {
+  const action = data?.actionLabel && data.actionUrl ? `\n\n${data.actionLabel}: ${data.actionUrl}` : '';
+  const message = `🔔 Brandly\n\n${title}\n\n${body}${action}\n\nBrandly Team`;
+  const batchId = crypto.randomUUID();
+  const results = await Promise.allSettled(userIds.map((userId) => sendAdminChatNotification(userId, message, batchId)));
+  const failedUserIds = results.flatMap((item, index) => item.status === 'rejected' ? [userIds[index]] : []);
+  return { requested: userIds.length, sent: userIds.length - failedUserIds.length, failed: failedUserIds.length, failedUserIds };
+}
+
+export async function sendAdminNotification(value: { userId: string; title: string; message: string; channel?: string; actionLabel?: string; actionUrl?: string; type?: string; data?: Record<string, string> }) {
+  const result = await sendAdminNotifications({
     userIds: [value.userId], title: value.title, body: value.message,
-    channels: value.channel === 'Email' ? ['EMAIL'] : value.channel === 'All' ? ['PUSH', 'EMAIL', 'WHATSAPP'] : ['PUSH'],
-    data: { ...(value.actionLabel ? { actionLabel: value.actionLabel } : {}), ...(value.actionUrl ? { actionUrl: value.actionUrl } : {}) },
+    channels: value.channel === 'In-app' ? ['IN_APP'] : value.channel === 'Email' ? ['EMAIL'] : value.channel === 'All' ? ['IN_APP', 'PUSH', 'EMAIL', 'WHATSAPP'] : ['PUSH'],
+    type: value.type,
+    data: { ...(value.actionLabel ? { actionLabel: value.actionLabel } : {}), ...(value.actionUrl ? { actionUrl: value.actionUrl } : {}), ...value.data },
   });
+  if (value.channel === 'Email' || value.channel === 'In-app') return result;
+  const action = value.actionLabel && value.actionUrl ? `\n\n${value.actionLabel}: ${value.actionUrl}` : '';
+  const chatResults = await Promise.allSettled(result.completedRecipients.map(({ notificationId }) => sendAdminChatNotification(value.userId, `🔔 Brandly\n\n${value.title}\n\n${value.message}${action}\n\nBrandly Team`, notificationId)));
+  return { ...result, chat: { sent: chatResults.filter((item) => item.status === 'fulfilled').length, failed: chatResults.filter((item) => item.status === 'rejected').length } };
 }
 
 export type AdminSocialReview = {
@@ -122,28 +173,44 @@ export type AdminSocialReview = {
 export function getAdminSocialReviews(offset = 0) {
   return request<{ items: AdminSocialReview[]; nextOffset: number | null }>(`/profiles/admin/social-reviews?take=25&offset=${offset}`);
 }
-export function reviewAdminSocialAccount(id: string) {
-  return request<{ id: string; userId: string; platform: string; status: string; reviewedAt: string; notificationQueued: boolean }>(`/profiles/admin/social-reviews/${encodeURIComponent(id)}`, {
-    method: 'PATCH', body: JSON.stringify({ status: 'VERIFIED' }),
+export type AdminSocialReviewUser = { id: string; name: string; email: string | null; role: 'Brand' | 'Creator'; status: string; city: string; avatarUrl: string | null; joinedAt: string; pendingCount: number; platforms: string[]; needsAttention: boolean; oldestPendingAt: string | null };
+export type AdminSocialReviewAccount = Omit<AdminSocialReview, 'user'> & { verificationStatus: 'PENDING' | 'VERIFIED' | 'UNVERIFIED' };
+export type AdminSocialReviewUserDetail = { user: { id: string; name: string; email: string | null; phone: string | null; role: 'Brand' | 'Creator'; status: string; city: string; bio: string; avatarUrl: string | null; profileCompleted: number; joinedAt: string }; accounts: AdminSocialReviewAccount[] };
+export function getAdminSocialReviewUsers(input: { query: string; take: number; offset: number }) {
+  const params = new URLSearchParams({ q: input.query, take: String(input.take), offset: String(input.offset) });
+  return request<{ items: AdminSocialReviewUser[]; nextOffset: number | null }>(`/profiles/admin/social-review-users?${params}`);
+}
+export function getAdminSocialReviewUser(id: string) {
+  return request<AdminSocialReviewUserDetail>(`/profiles/admin/social-review-users/${encodeURIComponent(id)}`);
+}
+export function reviewAdminSocialAccount(id: string, followerCount?: number) {
+  return request<{ id: string; userId: string; platform: string; status: string; followerCount: number | null; reviewedAt: string; notificationQueued: boolean }>(`/profiles/admin/social-reviews/${encodeURIComponent(id)}`, {
+    method: 'PATCH', body: JSON.stringify({ status: 'VERIFIED', ...(followerCount !== undefined ? { followerCount } : {}) }),
   });
 }
 
 export type AdminChatUser = { id: string; name: string; email: string | null; role: 'Brand' | 'Creator'; status: string; avatarUrl?: string | null; city?: string | null; conversationId: string | null; preview: string; updatedAt: string | null; unreadCount: number; online: boolean };
-export type AdminChatAttachment = { id: string; name: string; type: 'image' | 'video' | 'file'; uri: string };
+export type AdminChatFileAttachment = { id: string; name: string; type: 'image' | 'video' | 'file'; uri: string };
+export type AdminSocialReviewChatCard = { id: string; name: string; type: 'social-review'; accountId: string; platform: string; handle: string; contentType: string; contentUrl: string };
+export type AdminChatAttachment = AdminChatFileAttachment | AdminSocialReviewChatCard;
 export type AdminChatMessage = { id: string; text: string; mine: boolean; senderId: string; senderRole: 'ADMIN' | 'BRAND' | 'CREATOR'; senderName: string; clientMessageId?: string | null; attachments?: AdminChatAttachment[]; createdAt: string; time: string; status: 'delivered' | 'seen'; readAt: string | null };
 export type AdminChatSnapshot = { id: string; conversationId: string; participant: { id: string; name: string; role: string; avatarUrl: string | null }; online: boolean; messages: AdminChatMessage[]; hasMore: boolean; nextCursor?: string };
 export function getAdminChatUsers(search = '', offset = 0) { return request<{ items: AdminChatUser[]; nextOffset: number | null }>(`/admin/chats/users?take=30&offset=${offset}&search=${encodeURIComponent(search)}`); }
 export function openAdminChat(userId: string) { return request<Omit<AdminChatSnapshot, 'messages' | 'hasMore'>>(`/admin/chats/users/${encodeURIComponent(userId)}/conversation`, { method: 'POST', body: '{}' }); }
+export function sendAdminChatNotification(userId: string, text: string, notificationId: string) { return request<AdminChatMessage>(`/admin/chats/users/${encodeURIComponent(userId)}/notifications`, { method: 'POST', body: JSON.stringify({ text, clientMessageId: `notification:${notificationId}` }) }); }
 export function getAdminChatMessages(conversationId: string, before?: string) { return request<AdminChatSnapshot>(`/admin/chats/conversations/${encodeURIComponent(conversationId)}/messages${before ? `?before=${encodeURIComponent(before)}` : ''}`); }
 export function sendAdminChatMessage(conversationId: string, text: string, clientMessageId: string, attachments?: AdminChatAttachment[]) { return request<AdminChatMessage>(`/admin/chats/conversations/${encodeURIComponent(conversationId)}/messages`, { method: 'POST', body: JSON.stringify({ text, clientMessageId, attachments }) }); }
 export function markAdminChatRead(conversationId: string) { return request<{ read: number }>(`/admin/chats/conversations/${encodeURIComponent(conversationId)}/read`, { method: 'POST', body: '{}' }); }
 export function heartbeatAdminChat(conversationId: string) { return request<{ online: boolean }>(`/admin/chats/conversations/${encodeURIComponent(conversationId)}/heartbeat`, { method: 'POST', body: '{}' }); }
-export type AdminChatReport = { id: string; conversationId: string; userId: string; userName: string; email: string | null; role: 'Brand' | 'Creator'; type: 'FEEDBACK' | 'BUG_REPORT'; message: string; attachments: AdminChatAttachment[]; createdAt: string };
-export function getAdminChatReports(type: 'ALL' | 'FEEDBACK' | 'BUG_REPORT' = 'ALL', before?: string) { return request<{ items: AdminChatReport[]; nextCursor: string | null }>(`/admin/chats/reports?type=${type}&take=25${before ? `&before=${encodeURIComponent(before)}` : ''}`); }
+export type AdminChatReport = { id: string; conversationId: string; userId: string; userName: string; email: string | null; role: 'Brand' | 'Creator'; type: 'FEEDBACK' | 'BUG_REPORT'; message: string; attachments: AdminChatFileAttachment[]; createdAt: string };
+export function getAdminChatReports(input: { type: 'ALL' | 'FEEDBACK' | 'BUG_REPORT'; query: string; take: number; offset: number }) {
+  const params = new URLSearchParams({ type: input.type, q: input.query, take: String(input.take), offset: String(input.offset) });
+  return request<{ items: AdminChatReport[]; total: number; take: number; offset: number }>(`/admin/chats/reports?${params}`);
+}
 export type AccountReactivationRequest = { id: string; userId: string; message: string; status: 'PENDING' | 'APPROVED' | 'REJECTED'; reviewerId: string | null; reviewedAt: string | null; resolutionNote: string | null; createdAt: string; user: { id: string; role: string; status: string; email: string | null; suspensionReason: string | null; suspendedAt: string | null; profile: { displayName: string; avatarUrl: string | null } | null } };
 export function getAccountReactivationRequests(offset = 0) { return request<{ items: AccountReactivationRequest[]; nextOffset: number | null }>(`/admin/account-reactivations?take=25&offset=${offset}`); }
 export function reviewAccountReactivation(id: string, status: 'APPROVED' | 'REJECTED', resolutionNote?: string) { return request<AccountReactivationRequest>(`/admin/account-reactivations/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status, resolutionNote }) }); }
-export async function uploadAdminChatAttachment(file: File): Promise<AdminChatAttachment> {
+export async function uploadAdminChatAttachment(file: File): Promise<AdminChatFileAttachment> {
   const session = readAdminSession();
   if (!session?.accessToken) throw new Error('Admin sign-in is required to upload a file.');
   const form = new FormData(); form.append('category', 'chat'); form.append('file', file, file.name);

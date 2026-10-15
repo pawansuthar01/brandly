@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
-import { Bug, Check, FileText, Flag, Image as ImageIcon, LoaderCircle, MessageCircle, UserRoundCheck, Video, X } from 'lucide-react';
+import { Bug, Check, ChevronLeft, ChevronRight, FileText, Flag, LoaderCircle, MessageCircle, Search, UserRoundCheck, Video, X } from 'lucide-react';
 import { getAccountReactivationRequests, getAdminChatReports, resolveAdminMediaUrl, reviewAccountReactivation, type AccountReactivationRequest, type AdminChatReport } from '@/services/adminApi.service';
 import styles from './admin-support-reports.module.css';
 
@@ -10,8 +10,13 @@ type Filter = 'ALL' | 'FEEDBACK' | 'BUG_REPORT';
 
 export function AdminSupportReportsPage() {
   const [filter, setFilter] = useState<Filter>('ALL');
+  const [query, setQuery] = useState('');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [total, setTotal] = useState(0);
+  const [refresh, setRefresh] = useState(0);
   const [items, setItems] = useState<AdminChatReport[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [view, setView] = useState<'reports' | 'reactivation'>('reports');
@@ -19,17 +24,18 @@ export function AdminSupportReportsPage() {
   const [requestOffset, setRequestOffset] = useState<number | null>(null);
   const [reviewing, setReviewing] = useState<string | null>(null);
 
-  const load = useCallback(async (kind: Filter, before?: string, append = false) => {
+  useEffect(() => { const timer = window.setTimeout(() => setSearch(query.trim()), 250); return () => window.clearTimeout(timer); }, [query]);
+  useEffect(() => { setPage(1); }, [filter, search, pageSize]);
+  useEffect(() => {
+    if (view !== 'reports') return;
+    let current = true;
     setLoading(true); setError('');
-    try {
-      const page = await getAdminChatReports(kind, before);
-      setItems((current) => append ? [...current, ...page.items] : page.items);
-      setNextCursor(page.nextCursor);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Reports could not be loaded.'); }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { setItems([]); setNextCursor(null); void load(filter); }, [filter, load]);
+    void getAdminChatReports({ type: filter, query: search, take: pageSize, offset: (page - 1) * pageSize })
+      .then((result) => { if (current) { setItems(result.items); setTotal(result.total); } })
+      .catch((cause) => { if (current) setError(cause instanceof Error ? cause.message : 'Reports could not be loaded.'); })
+      .finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [filter, page, pageSize, refresh, search, view]);
 
   const loadReactivations = useCallback(async (offset = 0, append = false) => {
     setLoading(true); setError('');
@@ -74,21 +80,25 @@ export function AdminSupportReportsPage() {
     <nav className={styles.filters} aria-label="Report type">
       {([['ALL', 'All'], ['FEEDBACK', 'Feedback'], ['BUG_REPORT', 'Bug reports']] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={filter === value} className={filter === value ? styles.filterActive : ''} onClick={() => setFilter(value)}>{label}</button>)}
     </nav>
-    {error && <div className={styles.error} role="alert">{error}<button type="button" onClick={() => void load(filter)}>Retry</button></div>}
-    <section className={styles.list} aria-live="polite">
-      {items.map((item) => <article key={item.id} className={styles.card}>
-        <div className={styles.cardHeader}><span className={item.type === 'BUG_REPORT' ? styles.bugIcon : styles.feedbackIcon}>{item.type === 'BUG_REPORT' ? <Bug size={17} /> : <MessageCircle size={17} />}</span><div className={styles.reporter}><strong>{item.userName}</strong><span>{item.role}{item.email ? ` · ${item.email}` : ''}</span></div><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</time></div>
-        <div className={styles.kind}>{item.type === 'BUG_REPORT' ? 'Bug report' : 'Feedback'}</div>
-        <p className={styles.message}>{item.message || 'Attachment only'}</p>
-        {item.attachments.length > 0 && <div className={styles.attachments}>
-          {item.attachments.map((attachment) => attachment.type === 'image' ? <a key={attachment.id} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer" className={styles.image}><img src={resolveAdminMediaUrl(attachment.uri)} alt={attachment.name} onError={(event) => event.currentTarget.remove()} /><span><ImageIcon size={13} />{attachment.name}</span></a> : attachment.type === 'video' ? <a key={attachment.id} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer" className={styles.file}><Video size={16} />{attachment.name}</a> : <a key={attachment.id} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer" className={styles.file}><FileText size={16} />{attachment.name}</a>)}
-        </div>}
-        <footer><span>{item.attachments.length ? `${item.attachments.length} attachment${item.attachments.length === 1 ? '' : 's'}` : 'No attachments'}</span><Link href={`/admin/chats?user=${encodeURIComponent(item.userId)}`}><MessageCircle size={14} /> View in chat</Link></footer>
-      </article>)}
-      {loading && <div className={styles.state}><LoaderCircle className={styles.spin} size={19} />Loading reports…</div>}
-      {!loading && !error && !items.length && <div className={styles.state}><Flag size={21} /><strong>No reports yet</strong><span>New feedback and bug reports from users will appear here.</span></div>}
+    {error && <div className={styles.error} role="alert">{error}<button type="button" onClick={() => setRefresh((value) => value + 1)}>Retry</button></div>}
+    <div className={styles.reportToolbar}>
+      <label className={styles.search}><Search size={15} /><span className="srOnly">Search reports</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search user, email, or report text" /></label>
+      <label className={styles.limit}>Rows<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}><option value={10}>10</option><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option></select></label>
+    </div>
+    <section className={styles.tablePanel} aria-live="polite" aria-busy={loading}>
+      {loading ? <div className={styles.state}><LoaderCircle className={styles.spin} size={19} />Loading reports…</div> : items.length === 0 ? <div className={styles.state}><Flag size={21} /><strong>{search ? 'No matching reports' : 'No reports yet'}</strong><span>{search ? 'Try another user, email, or phrase.' : 'New feedback and bug reports from users will appear here.'}</span></div> : <div className={styles.tableWrap}><table className={styles.table}>
+        <thead><tr><th>Type</th><th>User</th><th>Report</th><th>Attachments</th><th>Received</th><th>Action</th></tr></thead>
+        <tbody>{items.map((item) => <tr key={item.id}>
+          <td><span className={`${styles.typeBadge} ${item.type === 'BUG_REPORT' ? styles.typeBug : ''}`}>{item.type === 'BUG_REPORT' ? <Bug size={14} /> : <MessageCircle size={14} />}{item.type === 'BUG_REPORT' ? 'Bug report' : 'Feedback'}</span></td>
+          <td><div className={styles.tableUser}><strong>{item.userName}</strong><span>{item.role}{item.email ? ` · ${item.email}` : ''}</span></div></td>
+          <td><div className={styles.tableMessage} title={item.message}>{item.message || 'Attachment only'}</div></td>
+          <td><div className={styles.tableAttachments}>{item.attachments.length ? item.attachments.slice(0, 3).map((attachment) => attachment.type === 'image' ? <a key={attachment.id} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer" title={attachment.name} aria-label={`Open image ${attachment.name}`} className={styles.thumb}><img src={resolveAdminMediaUrl(attachment.uri)} alt={attachment.name} onError={(event) => event.currentTarget.remove()} /></a> : <a key={attachment.id} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer" title={attachment.name} className={styles.fileIcon}>{attachment.type === 'video' ? <Video size={15} /> : <FileText size={15} />}</a>) : <span className={styles.noAttachment}>—</span>}{item.attachments.length > 3 && <span className={styles.moreAttachments}>+{item.attachments.length - 3}</span>}</div></td>
+          <td><time className={styles.date} dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}</time></td>
+          <td><Link href={`/admin/chats?user=${encodeURIComponent(item.userId)}`} className={styles.rowAction}><MessageCircle size={14} /> Chat</Link></td>
+        </tr>)}</tbody>
+      </table></div>}
     </section>
-    {nextCursor && <button type="button" className={styles.more} disabled={loading} onClick={() => void load(filter, nextCursor, true)}>{loading ? 'Loading…' : 'Load older reports'}</button>}
+    {total > 0 && <footer className={styles.tableFooter}><span>Showing {Math.min((page - 1) * pageSize + 1, total)}–{Math.min(page * pageSize, total)} of {total}</span><div><button type="button" aria-label="Previous page" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={16} /></button><span>{page} / {Math.max(1, Math.ceil(total / pageSize))}</span><button type="button" aria-label="Next page" disabled={page >= Math.ceil(total / pageSize) || loading} onClick={() => setPage((value) => value + 1)}><ChevronRight size={16} /></button></div></footer>}
     </>}
   </main>;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Image as ExpoImage } from "expo-image";
 import {
   Modal,
   Pressable,
@@ -87,24 +88,20 @@ export type MarketplaceFlow =
   | "delete-account";
 
 export type NotificationSettings = {
-  newMatches: boolean;
-  proposalRequests: boolean;
-  proposalUpdates: boolean;
   messages: boolean;
   profileActivity: boolean;
-  reminders: boolean;
+  proposalUpdates: boolean;
+  taskUpdates: boolean;
 };
 
 type ReviewListItem = Pick<CreatorReview, "id" | "author" | "rating" | "text" | "date" | "tags">;
 export type ReviewDraft = { subject: string; rating: number; text: string };
 
 export const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
-  newMatches: true,
-  proposalRequests: true,
-  proposalUpdates: true,
   messages: true,
   profileActivity: true,
-  reminders: true,
+  proposalUpdates: true,
+  taskUpdates: true,
 };
 
 const CAMPAIGN_LOCATION_OPTIONS = Array.from(
@@ -149,6 +146,9 @@ export function FlowScreen({
   blockedUsers = [],
   onUnblockUser,
   notificationSettings = DEFAULT_NOTIFICATION_SETTINGS,
+  notificationSettingsReady = true,
+  notificationSettingsError = "",
+  onReloadNotificationSettings,
   onNotificationSettingsSave,
   reminders = [],
   initialReminderId,
@@ -197,7 +197,10 @@ export function FlowScreen({
   blockedUsers?: string[];
   onUnblockUser?: (name: string) => void;
   notificationSettings?: NotificationSettings;
-  onNotificationSettingsSave?: (settings: NotificationSettings) => void;
+  notificationSettingsReady?: boolean;
+  notificationSettingsError?: string;
+  onReloadNotificationSettings?: () => void;
+  onNotificationSettingsSave?: (settings: NotificationSettings) => Promise<void> | void;
   reminders?: Reminder[];
   initialReminderId?: string;
   reminderSettings?: ReminderSettings;
@@ -214,7 +217,7 @@ export function FlowScreen({
     },
   ) => void;
   onDeleteAccount?: () => void;
-  onSupportSubmit?: (topic: string, message: string) => Promise<void> | void;
+  onSupportSubmit?: (topic: string, message: string, attachments: Array<{ id: string; name: string; type: "image" | "video" | "file"; uri: string }>) => Promise<void> | void;
 }) {
   const { theme } = useTheme();
   const { showToast } = useToast();
@@ -288,11 +291,15 @@ export function FlowScreen({
   const [supportTopic, setSupportTopic] = useState("Help with a collaboration");
   const [supportMessage, setSupportMessage] = useState("");
   const [supportSubmitting, setSupportSubmitting] = useState(false);
+  const [supportSent, setSupportSent] = useState(false);
+  const supportMedia = useMediaAttachments("chat");
   const [unblockTarget, setUnblockTarget] = useState<string | null>(null);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
   const [localNotificationSettings, setLocalNotificationSettings] =
     useState<NotificationSettings>(notificationSettings);
+  const [savingNotificationSettings, setSavingNotificationSettings] = useState(false);
+  useEffect(() => setLocalNotificationSettings(notificationSettings), [notificationSettings]);
   const [reviewLimit, setReviewLimit] = useState(3);
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewDraft, setReviewDraft] = useState("Professional, clear communication and a smooth collaboration.");
@@ -319,7 +326,9 @@ export function FlowScreen({
   const [campaignPlatforms, setCampaignPlatforms] = useState<SocialPlatform[]>(initialCampaign?.platforms ?? []);
   const [campaignVideoUrl, setCampaignVideoUrl] = useState(initialCampaign?.collaborationVideoUrl ?? "");
   const [campaignMedia, setCampaignMedia] = useState<DemoAttachment[]>(initialCampaign?.media ?? []);
+  const campaignCoverId = campaignMedia.find((item) => item.type === "image")?.id;
   const [campaignApplicationLimit, setCampaignApplicationLimit] = useState(initialCampaign?.applicationLimit ? String(initialCampaign.applicationLimit) : "");
+  const [campaignMinimumFollowers, setCampaignMinimumFollowers] = useState(initialCampaign?.minimumFollowers ? String(initialCampaign.minimumFollowers) : "");
   const [campaignApprovalLimit, setCampaignApprovalLimit] = useState(initialCampaign?.approvalLimit ? String(initialCampaign.approvalLimit) : "");
   const [closeOnApplicationLimit, setCloseOnApplicationLimit] = useState(initialCampaign?.closeOnApplicationLimit ?? true);
   const [closeOnApprovalLimit, setCloseOnApprovalLimit] = useState(initialCampaign?.closeOnApprovalLimit ?? true);
@@ -760,9 +769,10 @@ export function FlowScreen({
         return;
       }
       const applicationLimit = campaignApplicationLimit.trim() ? Number(campaignApplicationLimit) : undefined;
+      const minimumFollowers = campaignMinimumFollowers.trim() ? Number(campaignMinimumFollowers) : undefined;
       const approvalLimit = campaignApprovalLimit.trim() ? Number(campaignApprovalLimit) : undefined;
-      if ((applicationLimit !== undefined && (!Number.isInteger(applicationLimit) || applicationLimit < 1)) || (approvalLimit !== undefined && (!Number.isInteger(approvalLimit) || approvalLimit < 1))) {
-        showToast("Application and approval limits must be whole numbers greater than zero.");
+      if ((applicationLimit !== undefined && (!Number.isInteger(applicationLimit) || applicationLimit < 1)) || (minimumFollowers !== undefined && (!Number.isInteger(minimumFollowers) || minimumFollowers < 0 || minimumFollowers > 100_000_000)) || (approvalLimit !== undefined && (!Number.isInteger(approvalLimit) || approvalLimit < 1))) {
+        showToast("Follower minimum must be zero or more; application and approval limits must be whole numbers greater than zero.");
         return;
       }
       const requirements = campaignRequirements.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
@@ -782,6 +792,7 @@ export function FlowScreen({
         collaborationVideoUrl: campaignVideoUrl.trim(),
         media: campaignMedia,
         applicationLimit: applicationLimit ?? null,
+        minimumFollowers: minimumFollowers ?? null,
         approvalLimit: approvalLimit ?? null,
         closeOnApplicationLimit,
         closeOnApprovalLimit,
@@ -847,6 +858,8 @@ export function FlowScreen({
         <Field label="Creator requirements" value={campaignCreatorRequirements} onChangeText={setCampaignCreatorRequirements} multiline />
         <Field label="What do you need?" value={campaignDescription} multiline onChangeText={setCampaignDescription} />
         <Field label="Application requirements" value={campaignRequirements} multiline onChangeText={setCampaignRequirements} placeholder="One requirement per line" />
+        <Field label="Minimum followers (optional)" value={campaignMinimumFollowers} onChangeText={setCampaignMinimumFollowers} placeholder="Example: 10,000" />
+        <Text style={styles.body}>Uses the highest verified social-account count synced within the last 7 hours.</Text>
         <Field label="Maximum applications (optional)" value={campaignApplicationLimit} onChangeText={setCampaignApplicationLimit} placeholder="Example: 100" />
         <Field label="Maximum approved creators (optional)" value={campaignApprovalLimit} onChangeText={setCampaignApprovalLimit} placeholder="Example: 10" />
         <View style={styles.preferenceRow}>
@@ -858,11 +871,23 @@ export function FlowScreen({
           <Toggle value={closeOnApprovalLimit} onChange={setCloseOnApprovalLimit} accessibilityLabel="Hide campaign when approval limit is reached" />
         </View>
         <Field label="Video brief link" value={campaignVideoUrl} onChangeText={setCampaignVideoUrl} placeholder="https://..." />
+        <View style={styles.locationFieldGroup}>
+          <Text style={styles.label}>Campaign banner and media</Text>
+          <Text style={styles.body}>Select multiple images. The first image is used as the banner; tap another image to make it the banner.</Text>
+        </View>
         <View style={styles.attachmentActions}>
           <AppButton label="Add media" icon="image-outline" variant="secondary" compact onPress={() => void addCampaignMedia()} style={styles.attachmentButton} />
           <AppButton label="Attach file" icon="attach-outline" variant="secondary" compact onPress={() => void addCampaignFile()} style={styles.attachmentButton} />
         </View>
-        {campaignMedia.length ? <View style={styles.attachmentList}>{campaignMedia.map((item) => <View key={item.id} style={styles.attachmentRow}><AppIcon name={item.type === "image" ? "image-outline" : item.type === "video" ? "videocam-outline" : "document-outline"} size={18} color={theme.colors.primary} /><Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text><Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name} from campaign`} onPress={() => setCampaignMedia((current) => current.filter((asset) => asset.id !== item.id))}><AppIcon name="close-circle-outline" size={18} color={theme.colors.danger} /></Pressable></View>)}</View> : null}
+        {campaignMedia.length ? <View style={styles.attachmentList}>{campaignMedia.map((item) => {
+          const isCover = item.id === campaignCoverId;
+          return <View key={item.id} style={styles.attachmentRow}>
+            {item.type === "image" && item.uri ? <ExpoImage source={{ uri: item.uri }} contentFit="cover" style={styles.campaignMediaThumb} accessibilityLabel={item.name} /> : <AppIcon name={item.type === "video" ? "videocam-outline" : "document-outline"} size={18} color={theme.colors.primary} />}
+            <View style={styles.flex}><Text numberOfLines={1} style={styles.attachmentName}>{item.name}</Text>{isCover ? <Text style={styles.campaignCoverLabel}>Campaign banner</Text> : null}</View>
+            {item.type === "image" && !isCover ? <Pressable accessibilityRole="button" accessibilityLabel={`Use ${item.name} as campaign banner`} onPress={() => setCampaignMedia((current) => [item, ...current.filter((asset) => asset.id !== item.id)])}><AppIcon name="image-outline" size={18} color={theme.colors.primary} /></Pressable> : null}
+            <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name} from campaign`} onPress={() => setCampaignMedia((current) => current.filter((asset) => asset.id !== item.id))}><AppIcon name="close-circle-outline" size={18} color={theme.colors.danger} /></Pressable>
+          </View>;
+        })}</View> : null}
         <View style={styles.formActions}>
           <AppButton label="Save draft" icon="save-outline" variant="secondary" onPress={() => saveCampaign(false)} />
           <AppButton label={initialCampaign?.status === "Published" ? "Save published changes" : "Publish campaign"} icon="megaphone-outline" onPress={() => saveCampaign(true)} />
@@ -1191,47 +1216,13 @@ export function FlowScreen({
         <Back onBack={onBack} />
         <Pill label="NOTIFICATION SETTINGS" accent />
         <Text style={styles.title}>Choose what reaches you</Text>
-        <Text style={styles.body}>
-          Turn off any update you do not want. Unread notifications are the only
-          ones shown in your notification inbox.
-        </Text>
+        <Text style={styles.body}>Choose which app alerts Brandly sends to this account.</Text>
+        {!notificationSettingsReady ? <AppCard flat><Text style={styles.body}>{notificationSettingsError || "Loading your saved preferences…"}</Text>{notificationSettingsError ? <AppButton label="Retry loading" icon="refresh-outline" compact onPress={onReloadNotificationSettings} /> : null}</AppCard> : null}
         <PreferenceToggle
-          label="New campaign matches"
-          description="Relevant briefs, creators and brands in your preferred categories or locations."
-          value={localNotificationSettings.newMatches}
-          onChange={(value) =>
-            setLocalNotificationSettings((current) => ({
-              ...current,
-              newMatches: value,
-            }))
-          }
-        />
-        <PreferenceToggle
-          label="Proposal requests"
-          description="When someone sends you a new proposal or application."
-          value={localNotificationSettings.proposalRequests}
-          onChange={(value) =>
-            setLocalNotificationSettings((current) => ({
-              ...current,
-              proposalRequests: value,
-            }))
-          }
-        />
-        <PreferenceToggle
-          label="Proposal status changes"
-          description="Accepts, declines and updates to proposals you sent or received."
-          value={localNotificationSettings.proposalUpdates}
-          onChange={(value) =>
-            setLocalNotificationSettings((current) => ({
-              ...current,
-              proposalUpdates: value,
-            }))
-          }
-        />
-        <PreferenceToggle
-          label="Messages and attachments"
-          description="New chat messages and files shared in accepted collaborations."
+          label="Chat messages"
+          description="Push alerts for new Brandly chat messages."
           value={localNotificationSettings.messages}
+          disabled={!notificationSettingsReady}
           onChange={(value) =>
             setLocalNotificationSettings((current) => ({
               ...current,
@@ -1240,9 +1231,17 @@ export function FlowScreen({
           }
         />
         <PreferenceToggle
-          label="Profile and review activity"
-          description="Profile visibility, reviews and account activity updates."
+          label="Campaign and application updates"
+          description="Campaign invitations, applications and status changes."
+          value={localNotificationSettings.proposalUpdates}
+          disabled={!notificationSettingsReady}
+          onChange={(value) => setLocalNotificationSettings((current) => ({ ...current, proposalUpdates: value }))}
+        />
+        <PreferenceToggle
+          label="Account and social verification"
+          description="Social-account review and account activity updates."
           value={localNotificationSettings.profileActivity}
+          disabled={!notificationSettingsReady}
           onChange={(value) =>
             setLocalNotificationSettings((current) => ({
               ...current,
@@ -1250,23 +1249,22 @@ export function FlowScreen({
             }))
           }
         />
-        <PreferenceToggle
-          label="Delivery reminders"
-          description="Show incoming delivery reminders in your Brandly inbox."
-          value={localNotificationSettings.reminders}
-          onChange={(value) =>
-            setLocalNotificationSettings((current) => ({
-              ...current,
-              reminders: value,
-            }))
-          }
-        />
+        <PreferenceToggle label="Task updates" description="Alerts when a shared task changes. Reminder delivery is managed in Reminders." value={localNotificationSettings.taskUpdates} disabled={!notificationSettingsReady} onChange={(value) => setLocalNotificationSettings((current) => ({ ...current, taskUpdates: value }))} />
         <AppButton
-          label="Save notification settings"
+          label={notificationSettingsReady ? "Save notification settings" : "Load settings first"}
           icon="checkmark"
-          onPress={() => {
-            onNotificationSettingsSave?.(localNotificationSettings);
-            showToast("Notification settings saved");
+          loading={savingNotificationSettings}
+          disabled={savingNotificationSettings || !notificationSettingsReady}
+          onPress={async () => {
+            setSavingNotificationSettings(true);
+            try {
+              await onNotificationSettingsSave?.(localNotificationSettings);
+              showToast("Notification settings saved");
+            } catch (error) {
+              showToast(error instanceof Error ? error.message : "Settings could not be saved.", "error");
+            } finally {
+              setSavingNotificationSettings(false);
+            }
           }}
         />
       </ScrollView>
@@ -1380,6 +1378,14 @@ export function FlowScreen({
       <ScrollView style={styles.viewport} contentContainerStyle={styles.screen}>
         <Back onBack={onBack} />
         <Pill label="SUPPORT CENTER" accent />
+        {supportSent ? <AppCard style={styles.notice}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: theme.spacing.sm }}>
+            <AppIcon name="checkmark-circle" size={24} color={theme.colors.success} />
+            <Text style={styles.noticeTitle}>Sent to Brandly Support</Text>
+          </View>
+          <Text style={styles.body}>Your message is saved in Chats with Brandly. The support team can reply there.</Text>
+          <AppButton label="Send another message" icon="create-outline" variant="secondary" onPress={() => setSupportSent(false)} />
+        </AppCard> : <>
         <Text style={styles.title}>How can we help?</Text>
         <Text style={styles.body}>
           Tell us what you need help with. Keep collaboration details inside the app so the right team can respond.
@@ -1396,10 +1402,20 @@ export function FlowScreen({
           placeholder="Describe what you need help with"
           onChangeText={setSupportMessage}
         />
+        <View style={styles.attachmentActions}>
+          <View style={styles.attachmentAction}><AppButton label="Add photo or video" icon="images-outline" compact variant="secondary" disabled={supportMedia.isBusy || supportMedia.attachments.length >= 12} onPress={() => void supportMedia.addMedia()} style={styles.attachmentButton} /></View>
+          <View style={styles.attachmentAction}><AppButton label="Attach file" icon="attach-outline" compact variant="secondary" disabled={supportMedia.isBusy || supportMedia.attachments.length >= 12} onPress={() => void supportMedia.addFile()} style={styles.attachmentButton} /></View>
+        </View>
+        {supportMedia.attachments.length ? <View style={styles.attachmentList}>{supportMedia.attachments.map((item) => <View key={item.id} style={styles.attachmentRow}>
+          <AppIcon name={item.type === "image" ? "image-outline" : item.type === "video" ? "videocam-outline" : "document-outline"} size={18} color={theme.colors.primary} />
+          <Text numberOfLines={1} style={styles.attachmentName}>{item.name} · {item.uploadState === "uploaded" ? "Ready" : item.uploadState === "failed" ? "Upload failed" : item.uploadState === "uploading" ? "Uploading" : "Preparing"}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} onPress={() => supportMedia.removeAttachment(item.id)} hitSlop={8}><AppIcon name="close-circle-outline" size={20} color={theme.colors.danger} /></Pressable>
+        </View>)}</View> : null}
+        {supportMedia.uploadError ? <Text accessibilityRole="alert" style={styles.supportAttachmentError}>{supportMedia.uploadError}</Text> : null}
         <AppButton
-          label={supportSubmitting ? "Sending…" : "Send support request"}
+          label={supportSubmitting ? "Sending…" : "Send to Brandly Support"}
           icon="paper-plane-outline"
-          disabled={supportSubmitting}
+          disabled={supportSubmitting || supportMedia.isBusy}
           onPress={async () => {
             const topic = supportTopic.trim();
             const text = supportMessage.trim();
@@ -1409,9 +1425,12 @@ export function FlowScreen({
             if (!onSupportSubmit) { showToast("Support messaging is unavailable. Please try again.", "error"); return; }
             setSupportSubmitting(true);
             try {
-              await onSupportSubmit(topic, text);
+              const uploaded = await supportMedia.uploadAttachments();
+              await onSupportSubmit(topic, text, uploaded.map(({ uploadState: _uploadState, ...item }) => item));
               setSupportTopic("");
               setSupportMessage("");
+              supportMedia.clearAttachments();
+              setSupportSent(true);
               showToast("Message sent to Brandly Support.");
             } catch (error) {
               showToast(error instanceof Error ? error.message : "Support message could not be sent.", "error");
@@ -1420,6 +1439,7 @@ export function FlowScreen({
             }
           }}
         />
+        </>}
       </ScrollView>
     );
   if (flow === "delete-account")
@@ -2185,12 +2205,14 @@ function PreferenceToggle({
   initialValue = false,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   description: string;
   initialValue?: boolean;
   value?: boolean;
   onChange?: (value: boolean) => void;
+  disabled?: boolean;
 }) {
   const { theme } = useTheme();
   const styles = makeStyles(theme);
@@ -2204,9 +2226,10 @@ function PreferenceToggle({
   return (
     <Pressable
       accessibilityRole="switch"
-      accessibilityState={{ checked: enabled }}
+      accessibilityState={{ checked: enabled, disabled }}
+      disabled={disabled}
       onPress={toggle}
-      style={({ pressed }) => [styles.preferenceRow, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.preferenceRow, pressed && styles.pressed, disabled && { opacity: 0.55 }]}
     >
       <View style={styles.flex}>
         <Text style={styles.value}>{label}</Text>
@@ -2769,6 +2792,9 @@ const makeStyles = (theme: AppTheme) =>
     },
     attachmentButton: { width: "100%" },
     attachmentList: { gap: theme.spacing.xs },
+    campaignMediaThumb: { width: 54, height: 54, borderRadius: theme.radius.sm, backgroundColor: theme.colors.surfaceMuted },
+    campaignCoverLabel: { color: theme.colors.primary, fontSize: theme.type.caption, fontWeight: "800" },
+    supportAttachmentError: { color: theme.colors.danger, fontSize: theme.type.caption },
     attachmentRow: {
       flexDirection: "row",
       alignItems: "center",

@@ -85,6 +85,30 @@ function scoreCreator(campaign: CampaignRecord, creator: ApplicationRecord["crea
   return { score, reasons };
 }
 
+const SYNCED_FOLLOWER_COUNT_MAX_AGE_MS = 7 * 60 * 60 * 1_000;
+const REVIEWED_FOLLOWER_COUNT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
+
+export function freshVerifiedFollowerCount(accounts: ReadonlyArray<{ verificationStatus: string; syncStatus: string; followerCount: number | null; lastSyncedAt: Date | null; followerCountVerifiedAt?: Date | null }>, now = Date.now()) {
+  const freshVerifiedCounts = accounts
+    .filter((account) => {
+      const manuallyChecked = Boolean(account.followerCountVerifiedAt);
+      const checkedAt = account.followerCountVerifiedAt ?? (account.syncStatus === "SYNCED" ? account.lastSyncedAt : null);
+      const age = checkedAt ? now - checkedAt.getTime() : -1;
+      const maxAge = manuallyChecked ? REVIEWED_FOLLOWER_COUNT_MAX_AGE_MS : SYNCED_FOLLOWER_COUNT_MAX_AGE_MS;
+      return account.verificationStatus === "VERIFIED" && account.followerCount !== null && account.followerCount >= 0 && age >= 0 && age <= maxAge;
+    })
+    .map((account) => account.followerCount ?? 0);
+  return Math.max(0, ...freshVerifiedCounts);
+}
+
+function creatorFollowerCount(creator: ApplicationRecord["creator"]) {
+  return freshVerifiedFollowerCount(creator.socialAccounts);
+}
+
+function meetsMinimumFollowers(campaign: CampaignRecord, creator: ApplicationRecord["creator"]) {
+  return creatorFollowerCount(creator) >= (campaign.minimumFollowers ?? 0);
+}
+
 const MATCH_THRESHOLD = 50;
 const conversationPairKey = (brandId: string, creatorId: string) => `${brandId}:${creatorId}`;
 function activeApplications(campaign: CampaignRecord) {
@@ -96,7 +120,7 @@ function approvedApplications(campaign: CampaignRecord) {
 }
 
 function isCreatorMatch(campaign: CampaignRecord, creator: ApplicationRecord["creator"]) {
-  return scoreCreator(campaign, creator).score >= MATCH_THRESHOLD;
+  return meetsMinimumFollowers(campaign, creator) && scoreCreator(campaign, creator).score >= MATCH_THRESHOLD;
 }
 
 @Injectable()
@@ -142,7 +166,7 @@ export class CampaignsService {
       : user.role === "CREATOR" && creator
       ? campaigns.filter((campaign) => {
           const ownApplication = campaign.applications.some((application) => application.creatorId === user.userId);
-          return ownApplication || this.isDiscoverable(campaign);
+          return ownApplication || this.isDiscoverable(campaign) && Boolean(creator && meetsMinimumFollowers(campaign, creator as ApplicationRecord["creator"]));
         })
       : campaigns;
     const conversationIds = new Map<string, { id: string; submittedAt: Date }>();
@@ -171,7 +195,8 @@ export class CampaignsService {
   async get(user: AuthPrincipal, id: string) {
     await this.closeExpiredCampaigns();
     const campaign = await this.findAccessible(user, id);
-    return this.serializeCampaign(campaign, user);
+    const creator = user.role === "CREATOR" ? await this.prisma.user.findUnique({ where: { id: user.userId }, include: { profile: true, socialAccounts: { orderBy: { createdAt: "asc" } } } }) : null;
+    return this.serializeCampaign(campaign, user, creator as ApplicationRecord["creator"] | null);
   }
 
   async create(user: AuthPrincipal, dto: CreateCampaignDto) {
@@ -198,6 +223,7 @@ export class CampaignsService {
         collaborationVideoUrl: dto.collaborationVideoUrl?.trim() || null,
         collaborationVideoLabel: dto.collaborationVideoLabel?.trim() || null,
         applicationLimit: dto.applicationLimit ?? null,
+        minimumFollowers: dto.minimumFollowers ?? null,
         approvalLimit: dto.approvalLimit ?? null,
         closeOnApplicationLimit: dto.closeOnApplicationLimit ?? true,
         closeOnApprovalLimit: dto.closeOnApprovalLimit ?? true,
@@ -215,9 +241,7 @@ export class CampaignsService {
     const deadlineAt = dto.deadlineAt === undefined ? current.deadlineAt : parseDeadline(dto.deadlineAt);
     if (publish && (!deadlineAt || deadlineAt.getTime() <= Date.now())) throw new BadRequestException("Choose a future campaign deadline before publishing");
     const status = dto.status === "ARCHIVED" ? CampaignStatus.ARCHIVED : dto.status === "CLOSED" ? CampaignStatus.CLOSED : publish ? CampaignStatus.PUBLISHED : CampaignStatus.DRAFT;
-    const campaign = await this.prisma.campaign.update({
-      where: { id },
-      data: {
+    const campaignData: Prisma.CampaignUpdateInput = {
         ...(dto.title !== undefined ? { title: dto.title.trim() } : {}),
         ...(dto.description !== undefined ? { description: dto.description.trim() } : {}),
         ...(dto.targetLocations !== undefined || dto.city !== undefined ? { targetLocations: jsonInput(this.locations(dto)) } : {}),
@@ -234,13 +258,16 @@ export class CampaignsService {
         ...(dto.collaborationVideoUrl !== undefined ? { collaborationVideoUrl: dto.collaborationVideoUrl.trim() || null } : {}),
         ...(dto.collaborationVideoLabel !== undefined ? { collaborationVideoLabel: dto.collaborationVideoLabel.trim() || null } : {}),
         ...(dto.applicationLimit !== undefined ? { applicationLimit: dto.applicationLimit ?? null } : {}),
+        ...(dto.minimumFollowers !== undefined ? { minimumFollowers: dto.minimumFollowers ?? null } : {}),
         ...(dto.approvalLimit !== undefined ? { approvalLimit: dto.approvalLimit ?? null } : {}),
         ...(dto.closeOnApplicationLimit !== undefined ? { closeOnApplicationLimit: dto.closeOnApplicationLimit } : {}),
         ...(dto.closeOnApprovalLimit !== undefined ? { closeOnApprovalLimit: dto.closeOnApprovalLimit } : {}),
         ...(publish && !current.publishedAt ? { publishedAt: new Date() } : {}),
         ...(status === CampaignStatus.CLOSED ? { closedAt: new Date() } : status === CampaignStatus.PUBLISHED ? { closedAt: null } : {}),
-      },
-      include: campaignInclude,
+      };
+    const campaign = await this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM "campaigns" WHERE id = CAST(${id} AS uuid) FOR UPDATE`;
+      return transaction.campaign.update({ where: { id }, data: campaignData, include: campaignInclude });
     });
     return this.serializeCampaign(campaign, user);
   }
@@ -272,6 +299,8 @@ export class CampaignsService {
     this.assertCreator(user);
     const campaign = await this.findPublicCampaign(campaignId, user.userId);
     if (campaign.deadlineAt && campaign.deadlineAt.getTime() <= Date.now()) throw new BadRequestException("This campaign deadline has passed");
+    const creator = await this.prisma.user.findUnique({ where: { id: user.userId }, include: { profile: true, socialAccounts: { orderBy: { createdAt: "asc" } } } });
+    if (!creator || !meetsMinimumFollowers(campaign, creator as ApplicationRecord["creator"])) throw new ForbiddenException("Your follower count does not meet this campaign's minimum requirement");
     this.assertApplicationCapacity(campaign);
     const application = await this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`SELECT id FROM "campaigns" WHERE id = CAST(${campaignId} AS uuid) FOR UPDATE`;
@@ -365,9 +394,14 @@ export class CampaignsService {
     if (nextStatus === CampaignApplicationStatus.ACCEPTED && application.campaign.deadlineAt && application.campaign.deadlineAt.getTime() <= Date.now()) throw new BadRequestException("This campaign deadline has passed");
     const updated = await this.prisma.$transaction(async (transaction) => {
       await transaction.$queryRaw`SELECT id FROM "campaigns" WHERE id = CAST(${application.campaignId} AS uuid) FOR UPDATE`;
-      if (nextStatus === CampaignApplicationStatus.ACCEPTED && application.status !== CampaignApplicationStatus.ACCEPTED && application.campaign.approvalLimit !== null) {
-        const approvedCount = await transaction.campaignApplication.count({ where: { campaignId: application.campaignId, status: CampaignApplicationStatus.ACCEPTED, id: { not: applicationId } } });
-        if (approvedCount >= application.campaign.approvalLimit) throw new ConflictException("This campaign has reached its approval limit");
+      if (nextStatus === CampaignApplicationStatus.ACCEPTED && application.status !== CampaignApplicationStatus.ACCEPTED) {
+        const campaign = await transaction.campaign.findUnique({ where: { id: application.campaignId }, select: { visibility: true, approvalLimit: true } });
+        if (!campaign) throw new NotFoundException("Campaign not found");
+        if (campaign.visibility === CampaignVisibility.PRIVATE) throw new ConflictException("This campaign is private and can no longer be accepted");
+        if (campaign.approvalLimit !== null) {
+          const approvedCount = await transaction.campaignApplication.count({ where: { campaignId: application.campaignId, status: CampaignApplicationStatus.ACCEPTED, id: { not: applicationId } } });
+          if (approvedCount >= campaign.approvalLimit) throw new ConflictException("This campaign has reached its approval limit");
+        }
       }
       const saved = await transaction.campaignApplication.update({
         where: { id: applicationId },
@@ -542,6 +576,8 @@ export class CampaignsService {
       collaborationVideoLabel: campaign.collaborationVideoLabel || undefined,
       applicationCount: activeCount,
       applicationLimit: campaign.applicationLimit ?? undefined,
+      minimumFollowers: campaign.minimumFollowers ?? undefined,
+      minimumFollowersMet: viewer.role !== "CREATOR" || Boolean(creator && meetsMinimumFollowers(campaign, creator as ApplicationRecord["creator"])),
       approvalLimit: campaign.approvalLimit ?? undefined,
       approvedCount,
       applicationsOpen: this.isDiscoverable(campaign),

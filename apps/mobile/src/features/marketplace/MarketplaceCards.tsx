@@ -1,6 +1,7 @@
 import type { ComponentProps } from "react";
 import { useEffect, useRef, useState } from "react";
-import { Animated, Pressable, ScrollView, StyleProp, Text, View, ViewStyle } from "react-native";
+import { Animated, ImageStyle, Pressable, ScrollView, StyleProp, Text, View, ViewStyle } from "react-native";
+import { Image as ExpoImage } from "expo-image";
 import {
   AppButton,
   AppCard,
@@ -171,16 +172,23 @@ export function CampaignCard({
     styles.campaignCardBlush,
   ] as const;
   const tone = getCampaignTone(item.id);
+  const cover = item.media?.find((media) => media.type === "image" && media.uri);
+  const imageCount = item.media?.filter((media) => media.type === "image" && media.uri).length ?? 0;
   return (
     <AppCard
       onPress={onPress}
       style={[
         styles.campaignCard,
         campaignToneStyles[tone],
-        compact && styles.campaignRailCard,
+        cover?.uri && styles.campaignCardWithCover,
+        compact && (cover?.uri ? styles.campaignRailCardWithCover : styles.campaignRailCard),
         compact && width ? { width } : null,
       ]}
     >
+      {cover?.uri ? <View style={styles.campaignCoverWrap}>
+        <ExpoImage source={{ uri: cover.uri }} contentFit="cover" style={[styles.campaignCover as ImageStyle, compact && { height: 104 }]} accessibilityLabel={`${item.title} campaign banner`} />
+        {imageCount > 1 ? <View style={styles.campaignImageCount}><AppIcon name="images-outline" size={13} color={theme.colors.textPrimary} /><Text style={styles.campaignImageCountText}>{imageCount}</Text></View> : null}
+      </View> : null}
       <View style={styles.cardTop}>
         <View style={styles.campaignBrandRow}>
           <View style={styles.campaignBrandIcon}>
@@ -206,6 +214,11 @@ export function CampaignCard({
       <Text numberOfLines={2} style={styles.campaignDescription}>
         {item.description}
       </Text>
+      {item.applicationCount !== undefined ? <View style={styles.campaignAppliedRow}>
+        <AppIcon name="people-outline" size={15} color={theme.colors.textSecondary} />
+        <Text style={styles.creatorMeta}>{item.applicationCount} {item.applicationCount === 1 ? "creator applied" : "creators applied"}</Text>
+        {item.applicationLimit ? <Text style={styles.creatorMeta}>· {item.applicationCount}/{item.applicationLimit}</Text> : null}
+      </View> : null}
       <View style={styles.campaignMetaRow}>
         <View style={styles.campaignMeta}>
           <AppIcon

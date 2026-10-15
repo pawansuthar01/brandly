@@ -5,9 +5,9 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import {
-  Activity, Bell, BriefcaseBusiness, ChevronRight, MessageCircle, BadgeCheck, Flag,
+  Activity, Bell, BarChart3, BriefcaseBusiness, ChevronRight, MessageCircle, BadgeCheck, Flag,
   FileText, LayoutDashboard, LogOut, Menu, Moon, PanelLeftClose,
-  PanelLeftOpen, Palette, Settings2, Sun, Tags, Users, X,
+  PanelLeftOpen, Palette, Settings2, Sun, Users, X,
 } from 'lucide-react';
 import styles from './admin-shell.module.css';
 import { canAccessSection, clearAdminSession, type AdminRole } from '@/lib/admin-auth';
@@ -17,14 +17,13 @@ import type { AdminNotificationRecord } from '@/types/admin';
 import { setNotificationsOpen, setTheme, toggleSidebar, type AdminRootState } from '@/store/store';
 
 const groups = [
-  { label: 'Overview', links: [{ label: 'Dashboard', href: '/admin', icon: LayoutDashboard, section: 'dashboard' }] },
+  { label: 'Overview', links: [{ label: 'Dashboard', href: '/admin', icon: LayoutDashboard, section: 'dashboard' }, { label: 'Analytics', href: '/admin/analytics', icon: BarChart3, section: 'analytics' }] },
   {
     label: 'Marketplace',
     links: [
       { label: 'Users & profiles', href: '/admin/users', icon: Users, section: 'users' },
       { label: 'Campaigns', href: '/admin/campaigns', icon: BriefcaseBusiness, section: 'campaigns' },
       { label: 'Proposals', href: '/admin/proposals', icon: FileText, section: 'proposals' },
-      { label: 'Categories', href: '/admin/categories', icon: Tags, section: 'categories' },
     ],
   },
   {
@@ -106,7 +105,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         </nav>
         <div className={styles.sidebarFooter}>{collapsed ? activeRole : `${activeRole} workspace · v1.0`}</div>
       </aside>
-      <div className={`${styles.main} ${collapsed ? styles.mainCollapsed : ''} ${pathname === '/admin/themes' ? styles.mainTheme : ''}`}>
+      <div className={`${styles.main} ${collapsed ? styles.mainCollapsed : ''} ${pathname === '/admin/themes' ? styles.mainTheme : ''} ${pathname === '/admin/chats' ? styles.mainChat : ''}`}>
         <header className={styles.topbar}>
           <div className={styles.topbarLeft}>
             <button className={`${styles.iconButton} ${styles.mobileMenu}`} aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={18} /></button>
@@ -124,7 +123,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </div>
           {notificationsOpen && <div className={styles.notificationPanel} role="dialog" aria-label="Recent notification deliveries"><div className={styles.notificationHeader}><div><strong>Recent deliveries</strong><span>Saved notification records</span></div><button className={styles.notificationClose} onClick={() => dispatch(setNotificationsOpen(false))} aria-label="Close notifications"><X size={16} /></button></div><div className={styles.notificationList}>{notificationLoading ? <div className={styles.notificationItem}><span>Loading notification records…</span></div> : notificationError ? <div className={styles.notificationItem} role="alert"><span>{notificationError}</span></div> : recentNotifications.slice(0, 5).map((notification) => <Link href="/admin/notification-logs" className={styles.notificationItem} key={notification.id} onClick={() => dispatch(setNotificationsOpen(false))}><span className={`${styles.notificationIcon} ${styles.notificationBlue}`}><Bell size={14} /></span><div><strong>{notification.title}</strong><p>{notification.userName} · {notification.channel}</p><span>{new Date(notification.createdAt).toLocaleString()}</span></div><ChevronRight size={14} className={styles.notificationArrow} /></Link>)}{!notificationLoading && !notificationError && recentNotifications.length === 0 && <div className={styles.notificationItem}><span>No notification records found.</span></div>}</div>{notificationError ? <button className={styles.notificationFooter} onClick={() => { setNotificationLoading(true); void loadRecentNotifications(); }}><Activity size={14} /> Retry</button> : <Link href="/admin/notification-logs" className={styles.notificationFooter} onClick={() => dispatch(setNotificationsOpen(false))}>View delivery logs <ChevronRight size={14} /></Link>}</div>}
         </header>
-        <main className={`${styles.content} ${pathname === '/admin/themes' ? styles.contentTheme : ''}`}>{children}</main>
+        <main className={`${styles.content} ${pathname === '/admin/themes' ? styles.contentTheme : ''} ${pathname === '/admin/chats' ? styles.contentChat : ''}`}>{children}</main>
       </div>
     </div>
   );

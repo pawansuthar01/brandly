@@ -44,6 +44,8 @@ export class CreateCampaignDto {
   collaborationVideoLabel?: string;
   @IsOptional() @IsInt() @Min(1) @Max(100_000)
   applicationLimit?: number | null;
+  @IsOptional() @IsInt() @Min(0) @Max(100_000_000)
+  minimumFollowers?: number | null;
   @IsOptional() @IsInt() @Min(1) @Max(100_000)
   approvalLimit?: number | null;
   @IsOptional() @IsBoolean()

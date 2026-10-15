@@ -67,6 +67,9 @@ export function DetailView({
   blockedUsers,
   onBlockUser,
   notificationSettings,
+  notificationSettingsReady,
+  notificationSettingsError,
+  onReloadNotificationSettings,
   onNotificationSettingsSave,
   onDeleteAccount,
   onOpenChatProfile,
@@ -109,7 +112,10 @@ export function DetailView({
   blockedUsers: string[];
   onBlockUser: (name: string, userId?: string) => void;
   notificationSettings: NotificationSettings;
-  onNotificationSettingsSave: (settings: NotificationSettings) => void;
+  notificationSettingsReady?: boolean;
+  notificationSettingsError?: string;
+  onReloadNotificationSettings?: () => void;
+  onNotificationSettingsSave: (settings: NotificationSettings) => Promise<void> | void;
   onDeleteAccount: () => void;
   onOpenChatProfile: (name: string, returnTo: ChatReturn) => void;
   campaigns: Campaign[];
@@ -263,6 +269,9 @@ export function DetailView({
         blockedUsers={blockedUsers}
         onUnblockUser={onBlockUser}
         notificationSettings={notificationSettings}
+        notificationSettingsReady={notificationSettingsReady}
+        notificationSettingsError={notificationSettingsError}
+        onReloadNotificationSettings={onReloadNotificationSettings}
         onNotificationSettingsSave={onNotificationSettingsSave}
         onDeleteAccount={onDeleteAccount}
         initialSocialAccounts={initialSocialAccounts}

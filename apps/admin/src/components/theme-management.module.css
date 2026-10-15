@@ -1128,12 +1128,19 @@
 .libraryTabs .libraryTabActive { background: var(--color-surface); color: var(--color-primary); box-shadow: 0 1px 4px #24203318; }
 .historyContent,
 .presetList { display: grid; align-content: start; gap: 10px; min-height: 0; overflow: auto; }
-.historyContent .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.historyContent .row > div:first-child { grid-column: 1 / -1; }
-.historyContent .row strong { font-size: 14px; }
-.historyContent .row span { font-size: 12px; line-height: 1.45; }
-.historyContent .diff,
-.historyContent .audit { min-width: 0; }
+.historyContent { grid-auto-rows: max-content; }
+.historyCard { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--color-border); border-radius: 11px; background: var(--color-surface); box-sizing: border-box; }
+.historyCardSelected { border-color: var(--color-primary); background: var(--color-primary-soft); }
+.historyMeta { display: grid; gap: 5px; min-width: 0; }
+.historyMeta strong,
+.historyMeta span { display: block; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.historyMeta strong { color: var(--color-text-primary); font-size: 14px; line-height: 1.35; }
+.historyMeta span { color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; }
+.historyMeta em { margin-left: 6px; color: #188c6d; font-size: 9px; font-style: normal; }
+.historyCardActions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.historyCardActions > button { display: flex; width: 100%; min-width: 0; min-height: 40px; height: auto; padding: 8px; line-height: 1.25; text-align: center; white-space: normal; }
+.historyCardActions > button svg { flex: 0 0 auto; }
+.historyContent .diff { min-width: 0; }
 .historyActions { display: inline-flex; flex: 0 0 auto; gap: 4px; }
 .historyActions .iconButton:disabled { opacity: 0.4; cursor: not-allowed; }
 .presetCard { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px; border: 1px solid var(--color-border); border-radius: 11px; background: var(--color-background); }
@@ -1304,16 +1311,11 @@
 
 
 /* Keep the Theme Library drawer readable with long version notes and actions. */
-.historyContent .row { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; min-width: 0; }
-.historyContent .row > div:first-child { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
-.historyContent .row strong,
-.historyContent .row span { display: block; min-width: 0; overflow-wrap: anywhere; }
-.historyContent .row > button { width: 100%; min-width: 0; min-height: 38px; padding: 7px 8px; line-height: 1.25; text-align: center; white-space: normal; }
-.historyContent .audit > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, auto); align-items: start; min-width: 0; }
-.historyContent .audit > div > * { min-width: 0; overflow-wrap: anywhere; }
+.historyContent > .audit { min-width: 0; overflow: visible; }
+.historyContent > .audit > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; min-width: 0; gap: 8px; }
+.historyContent > .audit > div > * { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 520px) {
   .history { inset: 72px 8px 8px 8px; width: auto; }
-  .historyContent .row { grid-template-columns: minmax(0, 1fr); }
-  .historyContent .row > div:first-child { grid-column: 1; }
-  .historyContent .audit > div { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .historyCardActions { grid-template-columns: minmax(0, 1fr); }
+  .historyContent > .audit > div { grid-template-columns: minmax(0, 1fr); gap: 3px; }
 }

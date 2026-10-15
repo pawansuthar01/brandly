@@ -5,6 +5,7 @@ import type { AuthPrincipal } from "../../common/auth/auth.types.js";
 import type { ContentVerificationDto, ProfileDirectoryQueryDto, SocialAccountDto, UpdateProfileDto } from "./profiles.dto.js";
 import { SocialProfileSyncService } from "./social-profile-sync.service.js";
 import { NotificationsService } from "../notifications/notifications.service.js";
+import { AdminChatService } from "../chat/admin-chat.service.js";
 
 const directoryInclude = {
   profile: true,
@@ -38,6 +39,7 @@ export class ProfilesService {
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(SocialProfileSyncService) private readonly socialSync: SocialProfileSyncService,
     @Inject(NotificationsService) private readonly notifications: NotificationsService,
+    @Inject(AdminChatService) private readonly adminChat: AdminChatService,
   ) {}
 
   async getMe(userId: string) {
@@ -146,14 +148,17 @@ export class ProfilesService {
     return this.prisma.socialAccount.findUniqueOrThrow({ where: { id: account.id } });
   }
 
-  async requestSocialVerification(userId: string, accountId: string, dto: ContentVerificationDto) {
+  async requestSocialVerification(userId: string, role: UserRole, accountId: string, dto: ContentVerificationDto) {
     const account = await this.prisma.socialAccount.findFirst({ where: { id: accountId, userId } });
     if (!account) throw new NotFoundException("Social account not found");
     const existing = await this.prisma.contentVerification.findFirst({
       where: { socialAccountId: account.id, status: "PENDING" },
       orderBy: { createdAt: "desc" },
     });
-    if (existing) return existing;
+    if (existing) {
+      await this.adminChat.sendSocialReviewCard({ userId, role }, { requestId: existing.id, accountId: account.id, platform: account.platform, handle: account.handle, contentType: existing.contentType, contentUrl: existing.contentUrl });
+      return existing;
+    }
     const verification = await this.prisma.contentVerification.create({
       data: {
         userId,
@@ -163,6 +168,7 @@ export class ProfilesService {
       },
     });
     await this.prisma.socialAccount.update({ where: { id: account.id }, data: { verificationStatus: "PENDING" } });
+    await this.adminChat.sendSocialReviewCard({ userId, role }, { requestId: verification.id, accountId: account.id, platform: account.platform, handle: account.handle, contentType: verification.contentType, contentUrl: verification.contentUrl });
     return verification;
   }
 
@@ -265,10 +271,94 @@ export class ProfilesService {
     };
   }
 
-  async reviewSocialAccount(id: string, reviewerId: string) {
+  async listSocialReviewUsers(take: number, offset: number, query = "") {
+    const search = query.trim();
+    const where: Prisma.UserWhereInput = {
+      status: { not: "DELETED" },
+      role: { in: [UserRole.BRAND, UserRole.CREATOR] },
+      socialAccounts: { some: { verificationStatus: "PENDING" } },
+      ...(search ? { OR: [
+        { email: { contains: search, mode: "insensitive" } },
+        { profile: { is: { displayName: { contains: search, mode: "insensitive" } } } },
+        { socialAccounts: { some: { verificationStatus: "PENDING", OR: [
+          { platform: { contains: search, mode: "insensitive" } },
+          { handle: { contains: search, mode: "insensitive" } },
+          { displayName: { contains: search, mode: "insensitive" } },
+        ] } } },
+      ] } : {}),
+    };
+    const rows = await this.prisma.user.findMany({
+      where,
+      select: {
+        id: true, role: true, status: true, email: true, createdAt: true,
+        profile: { select: { displayName: true, city: true, avatarUrl: true } },
+        socialAccounts: {
+          where: { verificationStatus: "PENDING" },
+          select: { platform: true, syncStatus: true, syncError: true, createdAt: true },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: offset,
+      take: take + 1,
+    });
+    const hasMore = rows.length > take;
+    if (hasMore) rows.pop();
+    return {
+      items: rows.map(({ socialAccounts, ...user }) => ({
+        id: user.id,
+        name: user.profile?.displayName || user.email || "Unnamed account",
+        email: user.email,
+        role: user.role === UserRole.BRAND ? "Brand" : "Creator",
+        status: user.status,
+        city: user.profile?.city || "",
+        avatarUrl: user.profile?.avatarUrl,
+        joinedAt: user.createdAt.toISOString(),
+        pendingCount: socialAccounts.length,
+        platforms: [...new Set(socialAccounts.map((account) => account.platform))],
+        needsAttention: socialAccounts.some((account) => Boolean(account.syncError) || account.syncStatus.toUpperCase() !== "SYNCED"),
+        oldestPendingAt: socialAccounts[0]?.createdAt.toISOString() ?? null,
+      })),
+      nextOffset: hasMore ? offset + take : null,
+    };
+  }
+
+  async getAdminSocialReviewUser(userId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, status: { not: "DELETED" }, role: { in: [UserRole.BRAND, UserRole.CREATOR] } },
+      select: {
+        id: true, role: true, status: true, email: true, phoneE164: true, createdAt: true,
+        profile: { select: { displayName: true, city: true, bio: true, avatarUrl: true, profileCompleted: true } },
+        socialAccounts: {
+          select: {
+            id: true, platform: true, handle: true, profileUrl: true, displayName: true,
+            followerCount: true, followingCount: true, postCount: true, profileImageUrl: true,
+            syncStatus: true, syncError: true, verificationStatus: true, createdAt: true,
+            verifications: { where: { status: "PENDING" }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, contentType: true, contentUrl: true, createdAt: true } },
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        },
+      },
+    });
+    if (!user) throw new NotFoundException("Social review user not found");
+    return {
+      user: {
+        id: user.id, name: user.profile?.displayName || user.email || "Unnamed account", email: user.email,
+        phone: user.phoneE164, role: user.role === UserRole.BRAND ? "Brand" : "Creator", status: user.status,
+        city: user.profile?.city || "", bio: user.profile?.bio || "", avatarUrl: user.profile?.avatarUrl,
+        profileCompleted: user.profile?.profileCompleted ?? 0, joinedAt: user.createdAt.toISOString(),
+      },
+      accounts: user.socialAccounts.map(({ verifications, ...account }) => ({
+        ...account, createdAt: account.createdAt.toISOString(),
+        contentRequest: verifications[0] ? { ...verifications[0], createdAt: verifications[0].createdAt.toISOString() } : null,
+      })),
+    };
+  }
+
+  async reviewSocialAccount(id: string, reviewerId: string, followerCount?: number) {
     const reviewedAt = new Date();
     const account = await this.prisma.$transaction(async (transaction) => {
-      const current = await transaction.socialAccount.findUnique({ where: { id }, select: { id: true, userId: true, platform: true } });
+      const current = await transaction.socialAccount.findUnique({ where: { id }, select: { id: true, userId: true, platform: true, handle: true, followerCount: true } });
       if (!current) throw new NotFoundException("Social account review not found");
       const changed = await transaction.socialAccount.updateMany({
         where: { id, verificationStatus: "PENDING" },
@@ -279,8 +369,7 @@ export class ProfilesService {
           reviewedBy: reviewerId,
           reviewerNote: null,
           verificationMethod: "ADMIN_REVIEW",
-          syncStatus: "SYNCED",
-          syncError: null,
+          ...(followerCount !== undefined ? { followerCount, followerCountVerifiedAt: reviewedAt } : {}),
         },
       });
       if (!changed.count) throw new ConflictException("This social account was already reviewed. Refresh the queue.");
@@ -294,16 +383,16 @@ export class ProfilesService {
     try {
       await this.notifications.create(account.userId, {
         type: "SOCIAL_VERIFICATION",
-        title: "Social account verified",
-        body: `${account.platform} was verified successfully.`,
-        data: { screen: "Notifications", socialPlatform: account.platform, verificationStatus: "VERIFIED" },
+        title: `${account.platform} account verified`,
+        body: `${account.handle} on ${account.platform} was verified successfully.`,
+        data: { screen: "Notifications", socialPlatform: account.platform, socialAccountId: account.id, socialHandle: account.handle, verificationStatus: "VERIFIED" },
         channels: ["PUSH", "EMAIL", "WHATSAPP"],
       });
       notificationQueued = true;
     } catch {
       // Keep the review decision if a notification provider is unavailable.
     }
-    return { id, userId: account.userId, platform: account.platform, status: "VERIFIED" as const, reviewedAt: reviewedAt.toISOString(), notificationQueued };
+    return { id, userId: account.userId, platform: account.platform, status: "VERIFIED" as const, followerCount: followerCount ?? account.followerCount, reviewedAt: reviewedAt.toISOString(), notificationQueued };
   }
 
   async getPublic(userId: string, viewerId: string) {

@@ -471,6 +471,8 @@ export type Campaign = {
   visibility?: "public" | "private";
   applicationCount?: number;
   applicationLimit?: number | null;
+  minimumFollowers?: number | null;
+  minimumFollowersMet?: boolean;
   approvalLimit?: number | null;
   approvedCount?: number;
   applicationsOpen?: boolean;
@@ -498,6 +500,7 @@ export type CampaignDraft = {
   collaborationVideoLabel?: string;
   media?: DemoAttachment[];
   applicationLimit?: number | null;
+  minimumFollowers?: number | null;
   approvalLimit?: number | null;
   closeOnApplicationLimit?: boolean;
   closeOnApprovalLimit?: boolean;
@@ -605,12 +608,9 @@ export type DemoProposal = {
   attachments?: DemoAttachment[];
   schedule?: DeliverySchedule;
 };
-export type DemoAttachment = {
-  id: string;
-  name: string;
-  type: "image" | "video" | "file";
-  uri?: string;
-};
+export type DemoAttachment =
+  | { id: string; name: string; type: "image" | "video" | "file"; uri?: string }
+  | { id: string; name: string; type: "social-review"; uri?: string; accountId: string; platform: string; handle: string; contentType: string; contentUrl: string };
 export type ProposalDraft = {
   title: string;
   amount: string;

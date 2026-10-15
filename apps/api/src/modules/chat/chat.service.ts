@@ -152,17 +152,22 @@ export class ChatService {
     const accepted = application.status === "ACCEPTED";
     const blockedBy = await this.blockedBy(application.campaign.brandId, application.creatorId);
     const safeLimit = Math.min(Math.max(Number(limit) || 30, 1), 100);
-    if (before && !isUUID(before)) throw new BadRequestException("Invalid message cursor");
+    const recentCutoff = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    if (before && before !== "older" && !isUUID(before)) throw new BadRequestException("Invalid message cursor");
     const syncedAt = new Date().toISOString();
-    const cursor = before ? await this.prisma.chatMessage.findFirst({ where: { id: before, applicationId }, select: { id: true, createdAt: true } }) : null;
-    if (before && !cursor) throw new BadRequestException("Message cursor not found");
+    const cursor = before && before !== "older" ? await this.prisma.chatMessage.findFirst({ where: { id: before, applicationId }, select: { id: true, createdAt: true } }) : null;
+    if (before && before !== "older" && !cursor) throw new BadRequestException("Message cursor not found");
+    const olderWindow = before === "older" || Boolean(cursor && cursor.createdAt < recentCutoff);
     const records = accepted
       ? await this.prisma.chatMessage.findMany({
-          where: { applicationId, ...(cursor ? { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] } : {}) },
+          where: { applicationId, ...(olderWindow ? { createdAt: { lt: recentCutoff } } : { createdAt: { gte: recentCutoff } }), ...(cursor ? { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] } : {}) },
           include: messageInclude, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: safeLimit + 1,
         })
       : [];
-    const hasMore = records.length > safeLimit;
+    const hasOlderHistory = accepted && !olderWindow && records.length <= safeLimit
+      ? Boolean(await this.prisma.chatMessage.findFirst({ where: { applicationId, createdAt: { lt: recentCutoff } }, select: { id: true } }))
+      : false;
+    const hasMore = records.length > safeLimit || hasOlderHistory;
     const page = records.slice(0, safeLimit);
     page.reverse();
     const participant = this.participant(application, user);
@@ -176,7 +181,7 @@ export class ChatService {
       participant: { id: participant.id, name: participant.name, avatarUrl: participant.avatarUrl, online: await this.isOnline(participant.id) },
       messages: await this.serializeMessagesWithReplies(page, user.userId),
       hasMore,
-      nextCursor: hasMore ? page[0]?.id : undefined,
+      nextCursor: records.length > safeLimit ? page[0]?.id : hasOlderHistory ? "older" : undefined,
       syncedAt,
     };
   }
@@ -244,7 +249,6 @@ export class ChatService {
       channelId: "chat-messages",
       dedupeKey: `chat-message:${messageId}`,
       channels: ["PUSH"],
-      requirePushDelivery: false,
     }).catch(() => undefined);
   }
 

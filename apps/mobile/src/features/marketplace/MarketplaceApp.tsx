@@ -137,6 +137,7 @@ import {
 import { addMarketplaceMessage as addMarketplaceMessageAction, clearStudio, hydrateCampaignMarketplace, hydrateMarketplaceConversationMessages, hydrateMarketplaceConversations, hydrateStudio, markMarketplaceConversationRead, replaceStudioIdea, replaceStudioProject, setReminderOverride, clearSession, resetCampaignMarketplace, setOnboardingComplete, setProfile, setRole as setStoreRole, setSignupProfile, setSignupRole, setSignupStep, setUserIdentity, setVerification, setMarketplaceConversationBlocked, updateMarketplaceConversationPreferences, updateMarketplaceMessage as updateMarketplaceMessageAction, upsertMarketplaceApplication as upsertMarketplaceApplicationAction, type MobileRootState } from "../../store/store";
 import { addRemoteStudioNote, addRemoteTaskNote, archiveRemoteCampaign, confirmRemoteCampaignCompletion, createRemoteCampaign, createRemoteCampaignApplication, createRemoteCampaignReview, createRemoteStudioIdea, createRemoteStudioProject, createRemoteTask, deleteRemoteTask, deleteRemoteChatMessage, getChatSocketUrl, getRemoteAdminChatConversation, getRemoteAdminChatMessages, heartbeatRemoteAdminChat, getRemoteCampaignMatches, getRemoteCampaigns, getRemoteChatConversations, getRemoteChatMessages, getRemoteNotifications, getRemoteProfileDirectory, getRemoteProfileInteractions, getRemotePublicProfile, getRemoteStudio, getRemoteTasks, inviteRemoteCampaignCreator, logout as logoutRemote, markChatOffline, markRemoteAdminChatRead, markRemoteChatRead, markRemoteNotificationRead, registerRemoteDevice, removeRemoteStudioNote, removeRemoteTaskNote, requestOtp, restoreSession, saveRemoteSocialAccount, sendChatPresenceHeartbeat, sendChatTyping, sendRemoteAdminChatMessage, sendRemoteChatMessage, setRemoteProfileInteraction, setSessionExpiredHandler, shareRemoteTask, syncRemoteSocialAccount, updateRemoteCampaign, updateRemoteCampaignApplication, updateRemoteCampaignPayment, updateRemoteChatMessage, updateRemoteStudioIdea, updateRemoteStudioNote, updateRemoteStudioProject, updateRemoteStudioStage, updateRemoteTask, updateRemoteTaskNote, updateRemoteProfile, verifyOtp, withTimeout, type ApiPublicProfile, type ApiUser, type OtpChallenge, type RemoteAdminChatConversation, type RemoteAdminChatMessage, type RemoteAdminChatSnapshot, type RemoteCampaignMatch, type RemoteChatMessage, type RemoteChatSnapshot, type RemoteProfileInteractions, type RemoteTaskInput, type RemoteTaskQuery } from "../../services/authApi.service";
 import { openRemoteAdminChatConversation } from "../../services/authApi.service";
+import { getRemoteNotificationPreferences, saveRemoteNotificationPreferences } from "../../services/authApi.service";
 import { parseReminderDateTime } from "../../lib/reminders";
 import { normalizeTodoTask, taskDateKeyFromDate, taskDateRange } from "../../lib/tasks";
 import { CampaignDetailsView } from "./CampaignDetailsView";
@@ -349,7 +350,7 @@ const mapRemoteAdminChatMessage = (item: RemoteAdminChatMessage): MarketplaceMes
   id: item.id, text: item.text, mine: item.mine, senderId: item.senderId,
   senderRole: item.senderRole === "CREATOR" ? "Influencer" : "Brand", time: item.time,
   createdAt: item.createdAt, clientMessageId: item.clientMessageId ?? undefined,
-  status: item.status, edited: false, attachments: item.attachments,
+  status: item.status, edited: false, attachments: item.attachments, replyToId: item.replyToId, replyTo: item.replyTo,
 });
 
 export function MarketplaceApp() {
@@ -463,19 +464,26 @@ export function MarketplaceApp() {
       if (requestId !== notificationRequestId.current) return;
       setNotifications(items.map((item) => {
         const isReminder = item.type.includes("REMINDER") || item.data?.phase === "upcoming";
-        const isSocialVerification = item.type === "SOCIAL_VERIFICATION";
+        const isSocialVerification = item.type === "SOCIAL_VERIFICATION" || item.type === "NEW_ACCOUNT" || item.type.startsWith("ADMIN_");
+        const isCampaignUpdate = item.type === "CAMPAIGN_UPDATE";
+        const isTaskUpdate = item.type === "TASK_UPDATED";
         const mediaType = item.data?.mediaType;
         const mediaUri = item.data?.mediaUri;
         return {
           id: item.id,
-          icon: isReminder ? "alarm-outline" as const : isSocialVerification ? "checkmark-circle-outline" as const : "chatbubble-ellipses-outline" as const,
+          icon: isReminder ? "alarm-outline" as const : isSocialVerification ? "checkmark-circle-outline" as const : isCampaignUpdate ? "briefcase-outline" as const : "chatbubble-ellipses-outline" as const,
           title: item.title,
           body: item.body,
+          brandName: item.data?.brandName === "Brandly" ? "Brandly" : undefined,
+          actionLabel: typeof item.data?.actionLabel === "string" ? item.data.actionLabel : undefined,
+          actionUrl: typeof item.data?.actionUrl === "string" && /^https:\/\//i.test(item.data.actionUrl) ? item.data.actionUrl : undefined,
           time: formatNotificationTime(item.createdAt),
           read: Boolean(item.readAt),
-          category: isReminder ? "reminders" as const : isSocialVerification ? "profileActivity" as const : "messages" as const,
+          category: isReminder ? "reminders" as const : isSocialVerification ? "profileActivity" as const : isCampaignUpdate ? "proposalUpdates" as const : isTaskUpdate ? "taskUpdates" as const : "messages" as const,
           taskId: item.data?.taskId,
           reminderId: item.data?.reminderId,
+          campaignId: item.data?.campaignId,
+          screen: item.data?.screen,
           applicationId: item.data?.applicationId,
           conversationId: item.data?.conversationId,
           adminChat: item.data?.adminChat === "true",
@@ -494,6 +502,38 @@ export function MarketplaceApp() {
   }, [adminThemePreview, persistedAuth.userId]);
   const [notificationSettings, setNotificationSettings] =
     useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
+  const [notificationSettingsOwner, setNotificationSettingsOwner] = useState<string | null>(null);
+  const notificationSettingsReady = !persistedAuth.userId || adminThemePreview || notificationSettingsOwner === persistedAuth.userId;
+  const [notificationSettingsError, setNotificationSettingsError] = useState("");
+  const [notificationSettingsRetry, setNotificationSettingsRetry] = useState(0);
+  useEffect(() => {
+    let current = true;
+    const ownerId = persistedAuth.userId;
+    setNotificationSettingsError("");
+    if (!ownerId || adminThemePreview) {
+      setNotificationSettings(DEFAULT_NOTIFICATION_SETTINGS);
+      setNotificationSettingsOwner(null);
+      return () => { current = false; };
+    }
+    setNotificationSettingsOwner(null);
+    void getRemoteNotificationPreferences().then((settings) => {
+      if (current) {
+        setNotificationSettings(settings);
+        setNotificationSettingsOwner(ownerId);
+      }
+    }).catch((error) => {
+      if (current) setNotificationSettingsError(error instanceof Error ? error.message : "Saved settings could not be loaded.");
+    });
+    return () => { current = false; };
+  }, [adminThemePreview, notificationSettingsRetry, persistedAuth.userId]);
+  const saveNotificationSettings = useCallback(async (settings: NotificationSettings) => {
+    if (adminThemePreview) throw new Error("Settings cannot be saved from preview.");
+    if (!persistedAuth.userId) throw new Error("Sign in to save notification settings.");
+    if (!notificationSettingsReady) throw new Error("Load your saved notification settings before saving changes.");
+    const saved = await saveRemoteNotificationPreferences(settings);
+    setNotificationSettings(saved);
+    setNotificationSettingsOwner(persistedAuth.userId);
+  }, [adminThemePreview, notificationSettingsReady, persistedAuth.userId]);
   const [deletionRequest, setDeletionRequest] =
     useState<AccountDeletionRequest | null>(null);
   const [accountDeletedAt, setAccountDeletedAt] = useState<number | null>(null);
@@ -670,10 +710,12 @@ export function MarketplaceApp() {
   const remoteTasksOwnerRef = useRef(persistedAuth.userId);
   const reminderSigningOut = useRef(false);
   const handledReminderActions = useRef(new Set<string>());
-  const pendingNotificationRoute = useRef<{ taskId?: string; reminderId?: string; applicationId?: string; conversationId?: string } | null>(null);
+  const handledNotificationResponse = useRef<{ key: string; at: number } | null>(null);
+  const pendingNotificationRoute = useRef<{ taskId?: string; reminderId?: string; campaignId?: string; applicationId?: string; conversationId?: string } | null>(null);
   const [remoteChatSnapshots, setRemoteChatSnapshots] = useState<Record<string, RemoteChatSnapshot>>({});
   const [adminChatConversation, setAdminChatConversation] = useState<MarketplaceConversation | null>(null);
   const [adminChatSnapshot, setAdminChatSnapshot] = useState<RemoteAdminChatSnapshot | null>(null);
+  const adminChatSnapshotOwnerRef = useRef(persistedAuth.userId);
   const [chatTyping, setChatTyping] = useState<Record<string, boolean>>({});
   const chatOwnerRef = useRef(persistedAuth.userId);
   const [chatSearch, setChatSearch] = useState("");
@@ -688,6 +730,8 @@ export function MarketplaceApp() {
   const [chatHistoryLoading, setChatHistoryLoading] = useState(false);
   const [chatHistoryError, setChatHistoryError] = useState("");
   const chatHistoryBusy = useRef(new Set<string>());
+  const adminChatHistoryBusy = useRef(new Set<string>());
+  const adminChatHistorySyncedAt = useRef(new Map<string, number>());
   const chatCacheRef = useRef(marketplaceConversations);
   chatCacheRef.current = marketplaceConversations;
   const loadChatList = useCallback(async (search = "", more = false, force = false) => {
@@ -762,18 +806,40 @@ export function MarketplaceApp() {
       setChatHistoryError(error instanceof Error ? error.message : "Messages could not be loaded");
     } finally { chatHistoryBusy.current.delete(requestKey); setChatHistoryLoading(chatHistoryBusy.current.size > 0); }
   }, [dispatch, persistedAuth.userId, persistedAuth.role]);
-  const loadAdminChatHistory = useCallback(async (conversationId: string, before?: string) => {
+  const loadAdminChatHistory = useCallback(async (conversationId: string, before?: string, force = false) => {
+    const requestKey = `${conversationId}:${before ?? "latest"}`;
+    if (adminChatHistoryBusy.current.has(requestKey)) return;
+    if (!before && !force && adminChatSnapshot?.conversationId === conversationId && Date.now() - (adminChatHistorySyncedAt.current.get(conversationId) ?? 0) < 30_000) return;
+    const ownerId = persistedAuth.userId;
+    adminChatHistoryBusy.current.add(requestKey);
     setChatHistoryLoading(true); setChatHistoryError("");
     try {
+      if (!before && adminChatSnapshot?.conversationId !== conversationId && ownerId) {
+        const raw = await AsyncStorage.getItem(`brandly.admin-chat:${ownerId}`).catch(() => null);
+        try {
+          const cached = raw ? JSON.parse(raw) as RemoteAdminChatSnapshot : null;
+          if (cached?.conversationId === conversationId && Array.isArray(cached.messages) && cached.messages.every((message) => typeof message.id === "string" && typeof message.text === "string" && typeof message.mine === "boolean")) {
+            adminChatSnapshotOwnerRef.current = ownerId;
+            setAdminChatSnapshot(cached);
+            setAdminChatConversation(mapRemoteAdminChatConversation(cached));
+          }
+        } catch { /* Ignore an invalid local cache and fetch the server snapshot. */ }
+      }
       const snapshot = await getRemoteAdminChatMessages(conversationId, before);
-      if (chatOwnerRef.current !== persistedAuth.userId) return;
+      if (chatOwnerRef.current !== ownerId) return;
+      adminChatSnapshotOwnerRef.current = ownerId;
       const messages = snapshot.messages;
-      setAdminChatSnapshot((current) => ({ ...snapshot, messages: before ? [...messages, ...(current?.messages ?? [])] : messages }));
+      setAdminChatSnapshot((current) => {
+        const existing = current?.conversationId === conversationId ? current.messages : [];
+        const merged = new Map((before ? [...messages, ...existing] : [...existing, ...messages]).map((message) => [message.id, message]));
+        return { ...snapshot, messages: [...merged.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) };
+      });
+      if (!before) adminChatHistorySyncedAt.current.set(conversationId, Date.now());
       setAdminChatConversation((current) => current ? { ...current, online: snapshot.online, unreadCount: 0, preview: messages.at(-1)?.text ?? current.preview } : mapRemoteAdminChatConversation(snapshot));
       await markRemoteAdminChatRead(conversationId).catch(() => undefined);
     } catch (error) { setChatHistoryError(error instanceof Error ? error.message : "Brandly chat could not be loaded"); }
-    finally { setChatHistoryLoading(false); }
-  }, [persistedAuth.userId]);
+    finally { adminChatHistoryBusy.current.delete(requestKey); setChatHistoryLoading(adminChatHistoryBusy.current.size > 0 || chatHistoryBusy.current.size > 0); }
+  }, [adminChatSnapshot?.conversationId, persistedAuth.userId]);
   const remoteSnapshotOwnerRef = useRef<string | undefined>(undefined);
   const [remoteSnapshotReady, setRemoteSnapshotReady] = useState(false);
   const reminderOwnerRef = useRef(persistedAuth.userId);
@@ -1951,14 +2017,23 @@ export function MarketplaceApp() {
       dispatch(hydrateMarketplaceConversations([]));
       setRemoteChatSnapshots({});
       setAdminChatConversation(null); setAdminChatSnapshot(null);
+      adminChatSnapshotOwnerRef.current = undefined;
+      adminChatHistorySyncedAt.current.clear();
       setChatTyping({});
       chatListSyncedAt.current.clear();
       return;
     }
-    if (ownerChanged) { dispatch(hydrateMarketplaceConversations([])); setRemoteChatSnapshots({}); setAdminChatConversation(null); setAdminChatSnapshot(null); setChatTyping({}); chatListSyncedAt.current.clear(); }
+    if (ownerChanged) { dispatch(hydrateMarketplaceConversations([])); setRemoteChatSnapshots({}); setAdminChatConversation(null); setAdminChatSnapshot(null); adminChatSnapshotOwnerRef.current = undefined; adminChatHistorySyncedAt.current.clear(); setChatTyping({}); chatListSyncedAt.current.clear(); }
     void loadChatList("", false, true);
     return () => { chatListRequest.current += 1; };
   }, [authRestorePending, dispatch, persistedAuth.userId, loadChatList]);
+  useEffect(() => {
+    if (!persistedAuth.userId || !adminChatSnapshot || adminChatSnapshotOwnerRef.current !== persistedAuth.userId) return;
+    const messages = adminChatSnapshot.messages.slice(-30);
+    const hasMore = adminChatSnapshot.hasMore || adminChatSnapshot.messages.length > messages.length;
+    const cached = { ...adminChatSnapshot, messages, hasMore, nextCursor: hasMore ? messages[0]?.id : undefined };
+    void AsyncStorage.setItem(`brandly.admin-chat:${persistedAuth.userId}`, JSON.stringify(cached)).catch(() => undefined);
+  }, [adminChatSnapshot, persistedAuth.userId]);
   useEffect(() => {
     if (utilityPage !== "Chats" || !persistedAuth.userId) return;
     const timer = setTimeout(() => void loadChatList(chatSearch.trim()), 300);
@@ -2277,7 +2352,37 @@ export function MarketplaceApp() {
     });
     return () => { notificationRequestId.current += 1; subscription.remove(); };
   }, [adminThemePreview, loadRemoteNotifications, persistedAuth.userId]);
-  const openNotificationTarget = (target: { taskId?: string; reminderId?: string; applicationId?: string; conversationId?: string; adminChat?: boolean; socialPlatform?: string; verificationStatus?: string }) => {
+  const openNotificationTarget = (target: { taskId?: string; reminderId?: string; campaignId?: string; screen?: string; category?: AppNotification["category"]; applicationId?: string; conversationId?: string; adminChat?: boolean; socialPlatform?: string; verificationStatus?: string; actionLabel?: string; actionUrl?: string }) => {
+    if (target.actionUrl && /^https:\/\//i.test(target.actionUrl)) {
+      void openExternalLink(target.actionUrl, target.actionLabel || "Brandly update");
+      return;
+    }
+    const screen = target.screen?.trim().toLowerCase().replace(/[ _-]+/g, "");
+    const openScreen = () => {
+      if (screen === "chat" || screen === "chats") {
+        setDetail(null);
+        setUtilityPage("Chats");
+        return true;
+      }
+      if (screen === "notification" || screen === "notifications") {
+        setDetail(null);
+        setUtilityPage("Notifications");
+        return true;
+      }
+      if (screen === "task" || screen === "taskdetail" || screen === "calendar") {
+        setDetail(null);
+        setUtilityPage(null);
+        setActiveTab("Calendar");
+        return true;
+      }
+      const tab = (["Home", "Studio", "Market", "Discover", "Campaigns", "Calendar", "Budget", "Proposals", "Profile"] as const)
+        .find((item) => item.toLowerCase() === screen);
+      if (!tab) return false;
+      setDetail(null);
+      setUtilityPage(null);
+      setActiveTab(tab);
+      return true;
+    };
     if (target.adminChat && target.conversationId) {
       pendingNotificationRoute.current = null;
       setUtilityPage(null);
@@ -2292,7 +2397,8 @@ export function MarketplaceApp() {
       showToast(target.verificationStatus === "VERIFIED" ? `${target.socialPlatform} is verified.` : `${target.socialPlatform} needs an update. Check your social accounts.`);
       return;
     }
-    const applicationId = target.applicationId?.trim();
+    const isChat = screen === "chat" || screen === "chats" || target.category === "messages" || Boolean(target.applicationId || target.conversationId);
+    const applicationId = target.applicationId?.trim() || (isChat ? target.conversationId?.trim() : undefined);
     if (applicationId) {
       const application = applications.find((item) => item.id === applicationId);
       if (application) {
@@ -2312,6 +2418,32 @@ export function MarketplaceApp() {
           openMarketplaceChat({ application: target.conversationId ? { ...next, conversationId: target.conversationId } : next, messageMine: false }, { type: "utility", page: "Chats" });
         }
       }).catch(() => showToast("This chat could not be opened right now."));
+      return;
+    }
+    const campaignId = target.campaignId?.trim();
+    if (campaignId) {
+      const campaign = campaigns.find((item) => item.id === campaignId);
+      if (campaign) {
+        pendingNotificationRoute.current = null;
+        setUtilityPage(null);
+        setDetail({ type: "campaign", value: campaign });
+        return;
+      }
+      pendingNotificationRoute.current = { campaignId };
+      setDetail(null);
+      setActiveTab("Campaigns");
+      if (!persistedAuth.userId) return;
+      void getRemoteCampaigns().then((snapshot) => {
+        dispatch(hydrateCampaignMarketplace(snapshot));
+        const next = snapshot.campaigns.find((item) => item.id === campaignId);
+        if (next) {
+          pendingNotificationRoute.current = null;
+          setDetail({ type: "campaign", value: next });
+        } else {
+          pendingNotificationRoute.current = null;
+          setUtilityPage("Notifications");
+        }
+      }).catch(() => showToast("This campaign could not be opened right now."));
       return;
     }
     const taskId = target.taskId?.trim();
@@ -2347,8 +2479,15 @@ export function MarketplaceApp() {
       pendingNotificationRoute.current = null;
       setUtilityPage(null);
       setDetail({ type: "flow", flow: "reminders", reminderId });
+      return;
+    }
+    if (!openScreen()) {
+      setDetail(null);
+      setUtilityPage("Notifications");
     }
   };
+  const openNotificationTargetRef = useRef(openNotificationTarget);
+  openNotificationTargetRef.current = openNotificationTarget;
   useEffect(() => {
     const target = pendingNotificationRoute.current;
     if (!persistedAuth.userId) return;
@@ -2360,6 +2499,15 @@ export function MarketplaceApp() {
       }
       return;
     }
+    if (target?.campaignId) {
+      const campaign = campaigns.find((item) => item.id === target.campaignId);
+      if (campaign) {
+        pendingNotificationRoute.current = null;
+        setUtilityPage(null);
+        setDetail({ type: "campaign", value: campaign });
+      }
+      return;
+    }
     if (!target?.taskId) return;
     if (todoTasks.some((task) => task.id === target.taskId)) {
       pendingNotificationRoute.current = null;
@@ -2367,7 +2515,7 @@ export function MarketplaceApp() {
       setActiveTab("Calendar");
       setDetail({ type: "todo", taskId: target.taskId });
     }
-  }, [persistedAuth.userId, todoTasks]);
+  }, [applications, campaigns, persistedAuth.userId, todoTasks]);
   useEffect(() => {
     let active = true;
     let subscription: { remove: () => void } | undefined;
@@ -2375,7 +2523,7 @@ export function MarketplaceApp() {
       if (!active || !Notifications) return;
       void configureReminderNotifications().catch(() => undefined);
       subscription = Notifications.addNotificationReceivedListener((notification) => {
-        const data = notification.request.content.data as { type?: string; screen?: string; phase?: string; reminderId?: string; taskId?: string; applicationId?: string; conversationId?: string; adminChat?: string; messageId?: string; event?: string; status?: string; socialPlatform?: string; verificationStatus?: string; mediaUri?: string; mediaName?: string; mediaType?: string } | undefined;
+        const data = notification.request.content.data as { type?: string; screen?: string; phase?: string; reminderId?: string; taskId?: string; campaignId?: string; applicationId?: string; conversationId?: string; adminChat?: string; messageId?: string; event?: string; status?: string; socialPlatform?: string; verificationStatus?: string; mediaUri?: string; mediaName?: string; mediaType?: string } | undefined;
         if (data?.type === "SOCIAL_VERIFICATION") {
           const id = `social-verification-${data.socialPlatform ?? "account"}-${Date.now()}`;
           setNotifications((current) => [{
@@ -2389,7 +2537,7 @@ export function MarketplaceApp() {
           return;
         }
         const isAdminChat = data?.adminChat === "true";
-        const isChat = data?.type === "CHAT_MESSAGE" || data?.screen === "chat" || Boolean(data?.applicationId) || isAdminChat;
+        const isChat = data?.type === "CHAT_MESSAGE" || data?.screen === "chat" || data?.screen === "Chats" || Boolean(data?.applicationId || data?.conversationId) || isAdminChat;
         if (isChat) {
           if (data?.type === "CHAT_MESSAGE" && data.applicationId && activeChatIdRef.current === data.applicationId) return;
           const chatTargetId = data?.conversationId ?? data?.applicationId;
@@ -2406,6 +2554,7 @@ export function MarketplaceApp() {
               time: "Now",
               read: false,
               category: "messages",
+              screen: data?.screen,
               applicationId: data?.applicationId,
               conversationId: data?.conversationId,
               adminChat: isAdminChat,
@@ -2415,6 +2564,24 @@ export function MarketplaceApp() {
             },
             ...current,
           ]);
+          return;
+        }
+        const isReminder = data?.type === "TASK_REMINDER" || data?.type === "UPCOMING_TASK_REMINDER"
+          || data?.type === "task-reminder" || data?.type === "delivery-reminder"
+          || Boolean(data?.taskId || data?.reminderId || data?.phase === "upcoming");
+        if (!isReminder) {
+          const id = data?.messageId ? `push-${data.messageId}` : `push-${notification.request.identifier}`;
+          setNotifications((current) => current.some((item) => item.id === id) ? current : [{
+            id,
+            icon: data?.campaignId ? "briefcase-outline" : "paper-plane-outline",
+            title: notification.request.content.title ?? "Brandly update",
+            body: notification.request.content.body ?? "Tap to view this update.",
+            time: "Now",
+            read: false,
+            category: data?.campaignId ? "proposalUpdates" : "profileActivity",
+            campaignId: data?.campaignId,
+            screen: data?.screen,
+          }, ...current]);
           return;
         }
         const reminderId = String(data?.reminderId ?? Date.now());
@@ -2428,6 +2595,7 @@ export function MarketplaceApp() {
             time: "Now",
             read: false,
             category: "reminders",
+            screen: data?.screen,
             taskId: data?.taskId,
             reminderId: data?.reminderId,
           },
@@ -2445,22 +2613,30 @@ export function MarketplaceApp() {
     let subscription: { remove: () => void } | undefined;
     void getNotificationsModule().then((Notifications) => {
       if (!active || !Notifications) return;
-      subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      const handleNotificationResponse = (response: import("expo-notifications").NotificationResponse) => {
+        const responseKey = `${response.notification.request.identifier}:${response.actionIdentifier}`;
+        const previousResponse = handledNotificationResponse.current;
+        if (previousResponse?.key === responseKey && Date.now() - previousResponse.at < 3_000) return;
+        handledNotificationResponse.current = { key: responseKey, at: Date.now() };
+        void Notifications.clearLastNotificationResponseAsync().catch(() => undefined);
         const data = response.notification.request.content.data;
         if (data?.type === "SOCIAL_VERIFICATION") {
-          if (response.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER) openNotificationTarget({
+          if (response.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER) openNotificationTargetRef.current({
             socialPlatform: typeof data.socialPlatform === "string" ? data.socialPlatform : undefined,
             verificationStatus: typeof data.verificationStatus === "string" ? data.verificationStatus : undefined,
+            screen: typeof data.screen === "string" ? data.screen : undefined,
           });
           return;
         }
-        const isChat = data?.type === "CHAT_MESSAGE" || data?.screen === "chat" || typeof data?.applicationId === "string";
+        const isChat = data?.type === "CHAT_MESSAGE" || data?.screen === "chat" || data?.screen === "Chats"
+          || typeof data?.applicationId === "string" || typeof data?.conversationId === "string" || data?.adminChat === "true";
         if (isChat) {
           if (response.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER) {
-            openNotificationTarget({
+            openNotificationTargetRef.current({
               applicationId: typeof data?.applicationId === "string" ? data.applicationId : undefined,
               conversationId: typeof data?.conversationId === "string" ? data.conversationId : undefined,
               adminChat: data?.adminChat === "true",
+              screen: typeof data?.screen === "string" ? data.screen : "Chats",
             });
           }
           return;
@@ -2470,14 +2646,26 @@ export function MarketplaceApp() {
           || data?.phase === "upcoming"
           || Boolean(data?.taskId)
           || Boolean(data?.reminderId);
-        if (!isReminder) return;
+        if (!isReminder) {
+          if (response.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER) openNotificationTargetRef.current({
+            screen: typeof data?.screen === "string" ? data.screen : undefined,
+            campaignId: typeof data?.campaignId === "string" ? data.campaignId : undefined,
+            applicationId: typeof data?.applicationId === "string" ? data.applicationId : undefined,
+            conversationId: typeof data?.conversationId === "string" ? data.conversationId : undefined,
+            adminChat: data?.adminChat === "true",
+            actionLabel: typeof data?.actionLabel === "string" ? data.actionLabel : undefined,
+            actionUrl: typeof data?.actionUrl === "string" && /^https:\/\//i.test(data.actionUrl) ? data.actionUrl : undefined,
+          });
+          return;
+        }
         if (response.actionIdentifier !== DELIVERY_REMINDER_STOP_ACTION
           && response.actionIdentifier !== DELIVERY_REMINDER_SNOOZE_ACTION) {
           if (response.actionIdentifier === Notifications.DEFAULT_ACTION_IDENTIFIER) {
-            openNotificationTarget({
+            openNotificationTargetRef.current({
               taskId: typeof data?.taskId === "string" ? data.taskId : undefined,
               reminderId: typeof data?.reminderId === "string" ? data.reminderId : undefined,
               applicationId: typeof data?.applicationId === "string" ? data.applicationId : undefined,
+              screen: typeof data?.screen === "string" ? data.screen : undefined,
             });
           }
           return;
@@ -2525,7 +2713,11 @@ export function MarketplaceApp() {
             if (persistedAuth.userId) await syncReminderActions(persistedAuth.userId);
           })
           .catch((error) => showToast(error instanceof Error ? error.message : "Reminder action could not be saved", "error"));
-      });
+      };
+      subscription = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
+      void Notifications.getLastNotificationResponseAsync().then((response) => {
+        if (active && response) handleNotificationResponse(response);
+      }).catch(() => undefined);
     });
     return () => {
       active = false;
@@ -2858,6 +3050,9 @@ export function MarketplaceApp() {
     const conversation = marketplaceConversations.find((item) => item.id === conversationId);
     setUtilityPage(null);
     dispatch(markMarketplaceConversationRead(conversationId));
+    if (persistedAuth.userId && application.campaignId) {
+      void getRemoteCampaigns().then((snapshot) => dispatch(hydrateCampaignMarketplace(snapshot))).catch(() => undefined);
+    }
     setDetail({
       type: "chat",
       name: participantName,
@@ -3063,7 +3258,7 @@ export function MarketplaceApp() {
           })
           .catch(() => showToast("Reminder saved, but the alarm could not be scheduled."));
       }
-      if (notificationSettings.reminders) {
+      {
         setNotifications((current) => [
           {
             id: `reminder-set-${reminder.id}`,
@@ -3078,7 +3273,7 @@ export function MarketplaceApp() {
         ]);
       }
     }
-    if (notificationSettings.proposalUpdates || notificationSettings.proposalRequests) {
+    if (notificationSettings.proposalUpdates) {
       setNotifications((current) => [
         {
           id: `proposal-sent-${Date.now()}`,
@@ -3427,6 +3622,7 @@ export function MarketplaceApp() {
       collaborationVideoLabel: draft.collaborationVideoLabel ?? existing?.collaborationVideoLabel,
       media: draft.media ?? existing?.media,
       applicationLimit: draft.applicationLimit !== undefined ? draft.applicationLimit : existing?.applicationLimit,
+      minimumFollowers: draft.minimumFollowers !== undefined ? draft.minimumFollowers : existing?.minimumFollowers,
       approvalLimit: draft.approvalLimit !== undefined ? draft.approvalLimit : existing?.approvalLimit,
       closeOnApplicationLimit: draft.closeOnApplicationLimit ?? existing?.closeOnApplicationLimit ?? true,
       closeOnApprovalLimit: draft.closeOnApprovalLimit ?? existing?.closeOnApprovalLimit ?? true,
@@ -4028,7 +4224,10 @@ export function MarketplaceApp() {
           blockedUsers={blockedUsers}
           onUnblockUser={toggleBlockedUser}
           notificationSettings={notificationSettings}
-          onNotificationSettingsSave={setNotificationSettings}
+          notificationSettingsReady={notificationSettingsReady}
+          notificationSettingsError={notificationSettingsError}
+          onReloadNotificationSettings={() => setNotificationSettingsRetry((value) => value + 1)}
+          onNotificationSettingsSave={saveNotificationSettings}
           reminders={visibleReminders}
           reminderSettings={reminderSettings}
           onReminderToggle={toggleReminder}
@@ -4037,10 +4236,16 @@ export function MarketplaceApp() {
             saveReminderItemSettings(id, settings, schedule?.enabled, schedule)
           }
           onDeleteAccount={requestAccountDeletion}
-          onSupportSubmit={async (topic, message) => {
+          onSupportSubmit={async (topic, message, attachments) => {
             if (!persistedAuth.userId) throw new Error("Sign in to message Brandly Support.");
             const thread = await openRemoteAdminChatConversation();
-            await sendRemoteAdminChatMessage(thread.conversationId, `Support request · ${topic}\n\n${message}`, `support-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+            const saved = await sendRemoteAdminChatMessage(thread.conversationId, `Support request · ${topic}\n\n${message}`, `support-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, attachments);
+            adminChatSnapshotOwnerRef.current = persistedAuth.userId;
+            setAdminChatConversation(mapRemoteAdminChatConversation({ ...thread, preview: saved.text, updatedAt: saved.createdAt, unreadCount: 0 }));
+            setAdminChatSnapshot((current) => current?.conversationId === thread.conversationId
+              ? { ...current, messages: current.messages.some((item) => item.id === saved.id) ? current.messages : [...current.messages, saved] }
+              : { ...thread, messages: [saved], hasMore: false });
+            adminChatHistorySyncedAt.current.set(thread.conversationId, Date.now());
             void loadChatList("", false, true);
           }}
           initialSocialAccounts={socialAccounts}
@@ -4245,6 +4450,9 @@ export function MarketplaceApp() {
         online={detail.adminChat ? activeAdminChatSnapshot?.online ?? adminChatConversation?.online ?? false : activeRemoteChatSnapshot?.participant.online ?? activeMarketplaceConversation?.online ?? false}
         typing={!detail.adminChat && Boolean(activeChatConversationId && chatTyping[activeChatConversationId])}
         onBack={() => runBack(() => returnFromChat(detail.returnTo))}
+        isConversationPinned={Boolean(activeMarketplaceConversation?.favorite)}
+        onToggleConversationPin={activeMarketplaceConversation ? () => toggleConversationFavorite(activeMarketplaceConversation) : undefined}
+        pinStorageKey={activeChatConversationId ? `brandly.chat-pins:${persistedAuth.userId ?? "local"}:${activeChatConversationId}` : undefined}
         onOpenProfile={() => {
           if (detail.adminChat) return;
           const participantId = role === "Brand"
@@ -4300,20 +4508,49 @@ export function MarketplaceApp() {
         historyError={chatHistoryError}
         hasOlderMessages={detail.adminChat ? Boolean(activeAdminChatSnapshot?.nextCursor) : Boolean(activeMarketplaceConversation ? activeMarketplaceConversation.messageCursor : activeRemoteChatSnapshot?.nextCursor)}
         onLoadOlderMessages={() => { if (!activeChatConversationId) return; if (detail.adminChat) void loadAdminChatHistory(activeChatConversationId, activeAdminChatSnapshot?.nextCursor); else void loadChatHistory(activeChatConversationId, activeMarketplaceConversation?.messageCursor ?? activeRemoteChatSnapshot?.nextCursor); }}
-        onRetryHistory={() => { if (!activeChatConversationId) return; if (detail.adminChat) void loadAdminChatHistory(activeChatConversationId); else void loadChatHistory(activeChatConversationId, undefined, true); }}
+        onRetryHistory={() => { if (!activeChatConversationId) return; if (detail.adminChat) void loadAdminChatHistory(activeChatConversationId, undefined, true); else void loadChatHistory(activeChatConversationId, undefined, true); }}
+        forwardTargets={[
+          ...marketplaceConversations.filter((conversation) => conversation.id !== activeChatConversationId && conversation.status === "Accepted" && !conversation.blockedBy.length).map((conversation) => ({ id: conversation.id, name: conversation.participantName, preview: conversation.preview })),
+          ...(adminChatConversation && adminChatConversation.id !== activeChatConversationId ? [{ id: adminChatConversation.id, name: "Brandly Support", preview: adminChatConversation.preview }] : []),
+        ]}
+        onForwardMessages={async (targetId, forwardedMessages, batchId) => {
+          const targetIsAdminChat = targetId === adminChatConversation?.id;
+          for (const forwarded of forwardedMessages) {
+            const attachments = forwarded.attachments?.filter((attachment): attachment is DemoAttachment & { type: "image" | "video" | "file"; uri: string } => attachment.type !== "social-review" && Boolean(attachment.uri)) ?? [];
+            const text = forwarded.text ? `Forwarded message:\n${forwarded.text}` : "Forwarded attachment";
+            const clientMessageId = `forward-${batchId}-${forwarded.id}`;
+            if (targetIsAdminChat) {
+              const saved = await sendRemoteAdminChatMessage(targetId, text, clientMessageId, attachments.map((attachment) => ({ id: attachment.id, name: attachment.name, type: attachment.type, uri: attachment.uri ?? "" })));
+              setAdminChatSnapshot((current) => current?.conversationId === targetId && !current.messages.some((message) => message.id === saved.id) ? { ...current, messages: [...current.messages, saved] } : current);
+              adminChatHistorySyncedAt.current.set(targetId, Date.now());
+              setAdminChatConversation((current) => current?.id === targetId ? { ...current, preview: saved.text, updatedAt: saved.createdAt } : current);
+            } else if (persistedAuth.userId && isUuid(targetId)) {
+              const saved = await sendRemoteChatMessage(targetId, { text, attachments, clientMessageId });
+              const mapped = mapRemoteChatMessage(saved);
+              dispatch(addMarketplaceMessageAction({ conversationId: targetId, message: mapped }));
+              setRemoteChatSnapshots((current) => {
+                const snapshot = current[targetId];
+                return snapshot ? { ...current, [targetId]: { ...snapshot, messages: mergeRemoteChatMessage(snapshot.messages, mapped) } } : current;
+              });
+            } else {
+              const localMessage: MarketplaceMessage = { id: clientMessageId, clientMessageId, text, mine: true, senderRole: role, time: "Now", createdAt: new Date().toISOString(), status: "sent", attachments };
+              addMarketplaceMessage(targetId, localMessage);
+            }
+          }
+        }}
         videoBriefs={activeChatBriefs}
         tasks={todoTasks}
         receivedTaskSourceIds={todoTasks.filter((task) => task.sourceTaskId && (!currentCreator || task.creatorId === currentCreator.id)).flatMap((task) => task.sourceTaskId ? [task.sourceTaskId] : [])}
         campaigns={role === "Brand"
           ? brandCampaigns.filter((campaign) =>
-              isPublishedCampaign(campaign) &&
-              campaign.applicationsOpen !== false &&
-              (campaignMatchIdsByCreator[chatCampaignCreatorId ?? ""] ?? []).includes(campaign.id),
+              (isPublishedCampaign(campaign) && campaign.applicationsOpen !== false &&
+                (campaignMatchIdsByCreator[chatCampaignCreatorId ?? ""] ?? []).includes(campaign.id)) ||
+              applications.some((request) => (request.campaignId ?? request.briefId) === campaign.id),
             )
           : campaigns.filter((campaign) =>
-              isPublishedCampaign(campaign) &&
-              campaign.applicationsOpen !== false &&
-              campaign.brandId === (activeMarketplaceConversation?.brandId ?? activeMarketplaceApplication?.brandId ?? activeRemoteChatSnapshot?.participant.id),
+              campaign.brandId === (activeMarketplaceConversation?.brandId ?? activeMarketplaceApplication?.brandId ?? activeRemoteChatSnapshot?.participant.id) &&
+              ((isPublishedCampaign(campaign) && campaign.applicationsOpen !== false) ||
+                applications.some((request) => (request.campaignId ?? request.briefId) === campaign.id)),
             )}
         campaignsLoading={role === "Brand" && Boolean(campaignMatchIdsLoading[chatCampaignCreatorId ?? ""])}
         sentCampaignIds={sentCampaignIdsForChat}
@@ -4331,8 +4568,9 @@ export function MarketplaceApp() {
         onSendMessage={async (message) => {
           if (!activeChatConversationId) throw new Error("Open a valid conversation before sending a message.");
           if (detail.adminChat) {
-            const saved = await sendRemoteAdminChatMessage(activeChatConversationId, message.text, message.clientMessageId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, message.attachments?.map(({ id, name, type, uri }) => ({ id, name, type, uri: uri ?? "" })));
+            const saved = await sendRemoteAdminChatMessage(activeChatConversationId, message.text, message.clientMessageId ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, message.attachments?.map((attachment) => attachment.type === "social-review" ? attachment : ({ id: attachment.id, name: attachment.name, type: attachment.type, uri: attachment.uri ?? "" })), message.replyToId);
             setAdminChatSnapshot((current) => current?.conversationId === activeChatConversationId && !current.messages.some((item) => item.id === saved.id) ? { ...current, messages: [...current.messages, saved] } : current);
+            adminChatHistorySyncedAt.current.set(activeChatConversationId, Date.now());
             setAdminChatConversation((current) => current?.id === activeChatConversationId ? { ...current, preview: saved.text, updatedAt: saved.createdAt, unreadCount: 0 } : current);
             return mapRemoteAdminChatMessage(saved);
           }
@@ -4439,7 +4677,10 @@ export function MarketplaceApp() {
           blockedUsers={blockedUsers}
           onBlockUser={toggleBlockedUser}
           notificationSettings={notificationSettings}
-          onNotificationSettingsSave={setNotificationSettings}
+          notificationSettingsReady={notificationSettingsReady}
+          notificationSettingsError={notificationSettingsError}
+          onReloadNotificationSettings={() => setNotificationSettingsRetry((value) => value + 1)}
+          onNotificationSettingsSave={saveNotificationSettings}
           onDeleteAccount={requestAccountDeletion}
           onOpenChatProfile={openChatProfile}
           initialSocialAccounts={socialAccounts}
@@ -4621,7 +4862,7 @@ export function MarketplaceApp() {
          onReminderPress={openProposalReminder}
          loading={Boolean(persistedAuth.userId && !realCampaignsReady)}
          onEditCampaign={(campaign) => setDetail({ type: "flow", flow: "campaign-form", campaign })}
-        onPublishCampaign={(campaign) => handleCampaignSave({ id: campaign.id, title: campaign.title, city: campaign.city, category: campaign.category, budget: campaign.budget, description: campaign.description, deadline: campaign.deadline, platforms: campaign.platforms, deliverables: campaign.deliverables, requirements: campaign.requirements, creatorRequirements: campaign.creatorRequirements, collaborationVideoUrl: campaign.collaborationVideoUrl, collaborationVideoLabel: campaign.collaborationVideoLabel, media: campaign.media }, true)}
+        onPublishCampaign={(campaign) => handleCampaignSave({ id: campaign.id, title: campaign.title, city: campaign.city, category: campaign.category, budget: campaign.budget, description: campaign.description, deadline: campaign.deadline, platforms: campaign.platforms, deliverables: campaign.deliverables, requirements: campaign.requirements, creatorRequirements: campaign.creatorRequirements, collaborationVideoUrl: campaign.collaborationVideoUrl, collaborationVideoLabel: campaign.collaborationVideoLabel, media: campaign.media, minimumFollowers: campaign.minimumFollowers, applicationLimit: campaign.applicationLimit, approvalLimit: campaign.approvalLimit }, true)}
         onArchiveCampaign={(campaign) => handleCampaignArchive(campaign.id)}
         onChangeVisibility={(campaign, visibility) => {
           if (visibility === "private" && acceptedCampaignIds.includes(campaign.id)) {
@@ -4780,7 +5021,7 @@ export function MarketplaceApp() {
       : null;
   const isDarkMode = mode === "dark";
   const unreadNotificationCount = notifications.filter(
-    (notification) => !notification.read && notificationSettings[notification.category],
+    (notification) => !notification.read && (notification.category === "reminders" || notificationSettings[notification.category]),
   ).length;
   const roleBackground = isDarkMode
     ? theme.colors.background

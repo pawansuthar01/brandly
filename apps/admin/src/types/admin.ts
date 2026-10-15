@@ -1,7 +1,7 @@
 export type UserRole = 'Creator' | 'Brand';
 export type AccountStatus = 'Active' | 'Suspended' | 'Pending review' | 'Deleted';
 export type CampaignStatus = 'Draft' | 'Published' | 'Private' | 'Active' | 'Completed' | 'Archived';
-export type ProposalStatus = 'New' | 'In review' | 'Accepted' | 'Declined' | 'Withdrawn' | 'Completed';
+export type ProposalStatus = 'New' | 'Accepted' | 'Declined' | 'Withdrawn' | 'Completed';
 export type Audience = 'Brand' | 'Creator' | 'Both';
 
 // Keep the admin platform taxonomy aligned with the mobile profile flow.
@@ -44,6 +44,10 @@ export interface AdminNotificationRecord {
   lastDeliveryError?: string | null;
   actionLabel?: string;
   actionUrl?: string;
+  adminChat?: boolean;
+  mediaUri?: string;
+  mediaName?: string;
+  mediaType?: 'image' | 'video' | 'file';
   sentBy: string;
   createdAt: string;
   read: boolean;
@@ -60,6 +64,7 @@ export interface AdminUser {
   followers: string;
   joined: string;
   avatar: string;
+  avatarUrl?: string;
   categories: string[];
   phone?: string;
   state?: string;
@@ -78,37 +83,89 @@ export interface AdminUser {
 
 export interface Campaign {
   id: string;
+  brandId: string;
   title: string;
+  description: string;
   brand: string;
   category: string;
   location: string;
+  targetLocations: string[];
+  platforms: string[];
   status: CampaignStatus;
   proposals: number;
   budget: string;
   deadlineAt?: string | null;
+  deliverables: string;
+  requirements: string[];
+  creatorRequirements: string;
+  collaborationVideoUrl?: string | null;
+  collaborationVideoLabel?: string | null;
+  applicationLimit?: number | null;
+  approvalLimit?: number | null;
+  closeOnApplicationLimit: boolean;
+  closeOnApprovalLimit: boolean;
+  publishedAt?: string | null;
+  closedAt?: string | null;
+  createdAt: string;
   updated: string;
   media?: AdminMediaFile[];
 }
 
 export interface Proposal {
   id: string;
+  campaignId: string;
+  creatorId: string;
+  brandId: string;
   title: string;
   campaign: string;
   from: string;
   to: string;
   status: ProposalStatus;
   budget: string;
+  invitedByBrand?: boolean;
+  submittedAt?: string;
+  completedAt?: string | null;
   updated: string;
   hasMedia: boolean;
   media?: AdminMediaFile[];
 }
 
-export interface Category {
-  id: string;
-  name: string;
-  group: 'Category' | 'Platform' | 'Content type' | 'Collaboration';
-  usage: number;
-  status: 'Active' | 'Archived';
+export interface CampaignApplicationsPage {
+  items: Proposal[];
+  total: number;
+  take: number;
+  offset: number;
+}
+
+export interface ProposalPage extends CampaignApplicationsPage {}
+
+export interface ProposalDetail extends Proposal {
+  message: string;
+  responses: Record<string, unknown>;
+  contactShared: boolean;
+  rejectionReason: string | null;
+  allowReapply: boolean;
+  brandCompletedAt: string | null;
+  creatorCompletedAt: string | null;
+  campaignDetails: {
+    description: string;
+    category: string;
+    budget: string;
+    deadlineAt: string | null;
+    targetLocations: string[];
+    platforms: string[];
+    deliverables: string;
+    requirements: string[];
+  };
+  history: Array<{
+    id: string;
+    actorId: string;
+    actorRole: string;
+    status: ProposalStatus;
+    invitedByBrand: boolean;
+    rejectionReason: string | null;
+    occurredAt: string;
+  }>;
 }
 
 export interface VersionConfig {
@@ -184,5 +241,4 @@ export interface AdminSnapshot {
   users: AdminUser[];
   campaigns: Campaign[];
   proposals: Proposal[];
-  categories: Category[];
 }

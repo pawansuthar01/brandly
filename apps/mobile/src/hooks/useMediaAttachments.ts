@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { isLocalMediaUri, type MediaUploadCategory } from '../services/authApi.service';
-import { MediaAttachment, selectFileAttachment, selectMediaAttachment, uploadMediaAttachments } from '../services/mediaPicker.service';
+import { MediaAttachment, selectFileAttachment, selectGifAttachment, selectMediaAttachment, uploadMediaAttachments } from '../services/mediaPicker.service';
 
 const MAX_CHAT_ATTACHMENTS = 12;
 
@@ -105,6 +105,23 @@ export function useMediaAttachments(category: MediaUploadCategory = 'chat') {
     );
   };
 
+  const addGif = async () => {
+    await runSelection(
+      () => selectGifAttachment(),
+      (item) => {
+        if (!item) return;
+        if (category === 'chat' && attachmentRef.current.length >= MAX_CHAT_ATTACHMENTS) {
+          setUploadError(`You can attach up to ${MAX_CHAT_ATTACHMENTS} files to one message. Remove a file to add another.`);
+          return;
+        }
+        const next = [...attachmentRef.current, item];
+        attachmentRef.current = next;
+        setAttachments(next);
+        enqueueUploads([item]);
+      },
+    );
+  };
+
   const uploadAttachments = async () => {
     if (!attachmentRef.current.length) return [];
     if (uploadRunnerRef.current) await uploadRunnerRef.current;
@@ -134,6 +151,7 @@ export function useMediaAttachments(category: MediaUploadCategory = 'chat') {
     attachments,
     addMedia,
     addFile,
+    addGif,
     uploadAttachments,
     getUploadedAttachments,
     hasPendingUploads,

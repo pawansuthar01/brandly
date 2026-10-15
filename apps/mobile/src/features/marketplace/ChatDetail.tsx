@@ -1,4 +1,5 @@
 import { ComponentProps, useEffect, useRef, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   Animated,
   KeyboardAvoidingView,
@@ -86,18 +87,18 @@ function chatDayLabel(value?: string) {
 const REACTION_OPTIONS: {
   key: string;
   label: string;
-  icon: ChatIconName;
+  emoji: string;
   color: string;
   background: string;
 }[] = [
-  { key: "like", label: "Like", icon: "thumbs-up-outline", color: "#2563EB", background: "#DBEAFE" },
-  { key: "love", label: "Love", icon: "heart-outline", color: "#E11D48", background: "#FFE4E6" },
-  { key: "celebrate", label: "Celebrate", icon: "ribbon-outline", color: "#7C3AED", background: "#EDE9FE" },
-  { key: "laugh", label: "Funny", icon: "happy-outline", color: "#D97706", background: "#FEF3C7" },
-  { key: "approve", label: "Approve", icon: "checkmark-circle-outline", color: "#059669", background: "#D1FAE5" },
-  { key: "fire", label: "Great", icon: "flame-outline", color: "#EA580C", background: "#FFEDD5" },
-  { key: "star", label: "Star", icon: "star-outline", color: "#CA8A04", background: "#FEF9C3" },
-  { key: "idea", label: "Idea", icon: "bulb-outline", color: "#0891B2", background: "#CFFAFE" },
+  { key: "like", label: "Like", emoji: "👍", color: "#2563EB", background: "#DBEAFE" },
+  { key: "love", label: "Love", emoji: "❤️", color: "#E11D48", background: "#FFE4E6" },
+  { key: "celebrate", label: "Celebrate", emoji: "🎉", color: "#7C3AED", background: "#EDE9FE" },
+  { key: "laugh", label: "Funny", emoji: "😂", color: "#D97706", background: "#FEF3C7" },
+  { key: "approve", label: "Approve", emoji: "✅", color: "#059669", background: "#D1FAE5" },
+  { key: "fire", label: "Great", emoji: "🔥", color: "#EA580C", background: "#FFEDD5" },
+  { key: "star", label: "Star", emoji: "⭐", color: "#CA8A04", background: "#FEF9C3" },
+  { key: "idea", label: "Idea", emoji: "💡", color: "#0891B2", background: "#CFFAFE" },
 ];
 
 export function ChatDetail({
@@ -128,6 +129,11 @@ export function ChatDetail({
   onTyping,
   onUpdateMessage,
   onDeleteMessage,
+  forwardTargets = [],
+  onForwardMessages,
+  isConversationPinned = false,
+  onToggleConversationPin,
+  pinStorageKey,
   videoBriefs = [],
   tasks = [],
   receivedTaskSourceIds = [],
@@ -174,6 +180,11 @@ export function ChatDetail({
   onTyping?: (typing: boolean) => void;
   onUpdateMessage?: (messageId: string, changes: Partial<MarketplaceMessage>) => void | Promise<void>;
   onDeleteMessage?: (messageId: string) => void | Promise<void>;
+  forwardTargets?: { id: string; name: string; preview?: string }[];
+  onForwardMessages?: (targetId: string, messages: MarketplaceMessage[], batchId: string) => Promise<void>;
+  isConversationPinned?: boolean;
+  onToggleConversationPin?: () => void;
+  pinStorageKey?: string;
   videoBriefs?: TodoTask[];
   tasks?: TodoTask[];
   receivedTaskSourceIds?: string[];
@@ -224,6 +235,13 @@ export function ChatDetail({
   const onTypingRef = useRef(onTyping);
   onTypingRef.current = onTyping;
   const [composerActionsOpen, setComposerActionsOpen] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [forwardPickerOpen, setForwardPickerOpen] = useState(false);
+  const [forwarding, setForwarding] = useState(false);
+  const [forwardBatchId, setForwardBatchId] = useState("");
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [supportReportType, setSupportReportType] = useState<"Feedback" | "Bug report" | null>(null);
   const [supportReportText, setSupportReportText] = useState("");
   const [supportReportError, setSupportReportError] = useState("");
@@ -234,6 +252,7 @@ export function ChatDetail({
   const lastSendAttempt = useRef<ChatMessage | null>(null);
   const attachmentMessageSync = useRef<AttachmentMessageSync | null>(null);
   const threadRef = useRef<FlatList<ChatMessage>>(null);
+  const swipeValues = useRef(new Map<string, Animated.Value>());
   const keepAtBottom = useRef(true);
   const [selectedMedia, setSelectedMedia] = useState<{
     attachments: ChatAttachment[];
@@ -362,10 +381,71 @@ export function ChatDetail({
   const loadingOlderMessages = useRef(false);
   const olderMessagesBefore = useRef<{ createdAt: string; id: string } | null>(null);
   const [newMessageCount, setNewMessageCount] = useState(0);
+  const [olderHistoryExpanded, setOlderHistoryExpanded] = useState(false);
+  // shortcut: message pins stay on this account's device until chat exposes a server pin API.
+  const [pinnedMessage, setPinnedMessage] = useState<Pick<ChatMessage, "id" | "text" | "mine" | "createdAt" | "time"> | null>(null);
+  const [pinStoreReady, setPinStoreReady] = useState(false);
+  const [pinStoreKey, setPinStoreKey] = useState("");
+  const [initialHistoryCutoff] = useState(() => Date.now() - 2 * 24 * 60 * 60 * 1000);
+  const initialScrollPending = useRef(true);
+  const initialHistoryStarted = useRef(false);
   useEffect(() => {
     if (storedMessages) setMessages((current) => mergeChatMessages(current, normalizeStoredMessages(storedMessages)));
   }, [role, storedMessages]);
   useEffect(() => {
+    let active = true;
+    const key = pinStorageKey ?? "";
+    setPinStoreReady(false);
+    setPinStoreKey(key);
+    if (!key) { setPinnedMessage(null); setPinStoreReady(true); return () => { active = false; }; }
+    void AsyncStorage.getItem(key).then((raw) => {
+      if (!active) return;
+      try {
+        const value = raw ? JSON.parse(raw) as Pick<ChatMessage, "id" | "text" | "mine" | "createdAt" | "time"> : null;
+        setPinnedMessage(value && typeof value.id === "string" && typeof value.text === "string" && typeof value.mine === "boolean" ? value : null);
+      } catch { setPinnedMessage(null); }
+      setPinStoreReady(true);
+    }).catch(() => { if (active) { setPinnedMessage(null); setPinStoreReady(true); } });
+    return () => { active = false; };
+  }, [pinStorageKey]);
+  useEffect(() => {
+    if (!pinStoreReady || !pinStoreKey || pinStoreKey !== (pinStorageKey ?? "")) return;
+    const operation = pinnedMessage ? AsyncStorage.setItem(pinStoreKey, JSON.stringify(pinnedMessage)) : AsyncStorage.removeItem(pinStoreKey);
+    void operation.catch(() => undefined);
+  }, [pinStorageKey, pinStoreKey, pinStoreReady, pinnedMessage]);
+  useEffect(() => {
+    const deletedIds = new Set(messages.filter((message) => message.deleted).map((message) => message.id));
+    if (selectedMessage && deletedIds.has(selectedMessage.id)) { setSelectedMessage(null); setMessageActionMode(null); }
+    if (replyingTo && deletedIds.has(replyingTo.id)) setReplyingTo(null);
+    if (pinnedMessage && deletedIds.has(pinnedMessage.id)) setPinnedMessage(null);
+    if (deletedIds.size) setReactions((current) => Object.fromEntries(Object.entries(current).filter(([id]) => !deletedIds.has(id))));
+  }, [messages, pinnedMessage, replyingTo, selectedMessage]);
+  useEffect(() => {
+    if (historyLoading) { initialHistoryStarted.current = true; return; }
+    if (!initialHistoryStarted.current || !initialScrollPending.current) return;
+    requestAnimationFrame(() => {
+      threadRef.current?.scrollToEnd({ animated: false });
+      keepAtBottom.current = true;
+      initialScrollPending.current = false;
+    });
+  }, [historyLoading]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!initialScrollPending.current || initialHistoryStarted.current) return;
+      requestAnimationFrame(() => {
+        threadRef.current?.scrollToEnd({ animated: false });
+        keepAtBottom.current = true;
+        initialScrollPending.current = false;
+      });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [conversationId]);
+  useEffect(() => {
+    if (initialScrollPending.current) {
+      messages.forEach((message) => seenMessageIds.current.add(message.id));
+      requestAnimationFrame(() => threadRef.current?.scrollToEnd({ animated: false }));
+      return;
+    }
     let incoming = messages.filter((message) => !seenMessageIds.current.has(message.id));
     if (loadingOlderMessages.current) {
       const cutoff = olderMessagesBefore.current;
@@ -379,7 +459,7 @@ export function ChatDetail({
     }
     incoming.forEach((message) => seenMessageIds.current.add(message.id));
     if (!incoming.length) return;
-    if (incoming.some((message) => message.mine) || keepAtBottom.current) {
+    if (keepAtBottom.current) {
       keepAtBottom.current = true;
       setNewMessageCount(0);
       requestAnimationFrame(() => threadRef.current?.scrollToEnd({ animated: true }));
@@ -390,6 +470,7 @@ export function ChatDetail({
   const {
     attachments,
     addFile,
+    addGif,
     addMedia,
     uploadAttachments,
     getUploadedAttachments,
@@ -505,7 +586,7 @@ export function ChatDetail({
     setMessageActionMode(null);
   };
   const chooseReaction = (reaction: string) => {
-    if (!selectedMessage) return;
+    if (!selectedMessage || selectedMessage.deleted) return;
     setReactions((current) => ({
       ...current,
       [selectedMessage.id]:
@@ -514,27 +595,20 @@ export function ChatDetail({
     closeMessageActions();
   };
   const startReply = () => {
-    if (!selectedMessage) return;
+    if (!selectedMessage || selectedMessage.deleted || !canMessage) return;
     setReplyingTo(selectedMessage);
     closeMessageActions();
   };
-  const mentionParticipant = () => {
-    const mention = `@${name}`;
-    const nextDraft = draft.trim() ? `${draft.replace(/\s+$/, "")} ${mention} ` : `${mention} `;
-    setDraft(nextDraft);
-    notifyTyping(true);
-    closeMessageActions();
-    requestAnimationFrame(() => composerInputRef.current?.focus());
+  const toggleLike = (message: ChatMessage) => {
+    if (message.deleted) return;
+    setReactions((current) => ({ ...current, [message.id]: current[message.id] === "like" ? undefined : "like" }));
   };
-  const toggleLike = (messageId: string) => setReactions((current) => ({
-    ...current,
-    [messageId]: current[messageId] === "like" ? undefined : "like",
-  }));
   const handleMessagePress = (message: ChatMessage) => {
+    if (message.deleted) return;
     const now = Date.now();
     const previous = lastMessageTap.current;
     if (previous?.id === message.id && now - previous.at < 320) {
-      toggleLike(message.id);
+      toggleLike(message);
       lastMessageTap.current = null;
       return;
     }
@@ -544,14 +618,14 @@ export function ChatDetail({
     }, 340);
   };
   const startEdit = () => {
-    if (!selectedMessage?.mine) return;
+    if (!selectedMessage?.mine || selectedMessage.deleted || adminChat || !onUpdateMessage) return;
     setEditingMessageId(selectedMessage.id);
     setDraft(selectedMessage.text);
     setReplyingTo(null);
     closeMessageActions();
   };
   const confirmDeleteMessage = async () => {
-    if (!messageToDelete || sendLocked.current) return;
+    if (!messageToDelete || messageToDelete.deleted || adminChat || !onDeleteMessage || sendLocked.current) return;
     const removed = messageToDelete;
     sendLocked.current = true; setIsSending(true);
     try {
@@ -585,6 +659,17 @@ export function ChatDetail({
     if (message.attachments?.length) return `${message.attachments.length} attachment${message.attachments.length === 1 ? "" : "s"}`;
     return "Message";
   };
+  const togglePinnedMessage = (message: ChatMessage) => {
+    if (message.deleted || !pinStorageKey) return;
+    setPinnedMessage((current) => current?.id === message.id ? null : {
+      id: message.id,
+      text: messagePreviewText(message),
+      mine: message.mine,
+      createdAt: message.createdAt,
+      time: message.time,
+    });
+    closeMessageActions();
+  };
   const replyPreviewFor = (message: ChatMessage) => {
     if (message.replyTo) return message.replyTo;
     if (!message.replyToId) return undefined;
@@ -595,11 +680,12 @@ export function ChatDetail({
       text: messagePreviewText(target),
     };
   };
+  const applicationAttachments = application?.attachments.filter((attachment): attachment is ChatAttachment => attachment.type !== "social-review") ?? [];
   const applicationCard = application ? <AppCard style={styles.applicationCard}>
     <View style={styles.applicationHeader}><View style={styles.flex}><Text style={styles.applicationEyebrow}>APPLICATION</Text><Text style={styles.applicationTitle}>{application.briefTitle}</Text><Text style={styles.applicationMeta}>{application.brandName} · {formatDisplayDateTime(application.submittedAt)}</Text></View><Text style={styles.applicationStatus}>{application.status === "Declined" ? "Rejected" : application.status}</Text></View>
     <View style={styles.applicationPerson}><Avatar initials={application.creatorInitials} uri={application.creatorProfile.avatarUrl} size="small" /><View style={styles.flex}><Text style={styles.applicationName}>{application.creatorName}</Text><Text style={styles.applicationMeta}>{application.creatorProfile.niche} · {application.creatorProfile.city} · {application.creatorProfile.followers} followers</Text></View></View>
     <Text style={styles.applicationBody}>{application.message}</Text>
-    {application.attachments.length ? <ChatAttachmentGrid attachments={application.attachments} onOpen={(index) => openMedia(application.attachments, index)} /> : null}
+    {applicationAttachments.length ? <ChatAttachmentGrid attachments={applicationAttachments} onOpen={(index) => openMedia(applicationAttachments, index)} /> : null}
     {application.status === "Declined" ? <View style={styles.declineInfo}><Text style={styles.applicationName}>Brand feedback</Text><Text style={styles.applicationBody}>{application.rejectionReason || "The brand declined this application."}</Text><Text style={styles.applicationMeta}>{application.canReapply ? role === "Brand" ? "The creator may apply again." : "You can apply again from Market." : "Another application is not available for this brief."}</Text></View> : null}
     {!blocked && canReviewApplication && application.status === "Pending" && onAcceptApplication && onRejectApplication ? <View style={styles.applicationActions}><AppButton label="Accept" icon="checkmark" loading={applicationActionPending} onPress={() => { setApplicationActionPending(true); void Promise.resolve(onAcceptApplication()).finally(() => setApplicationActionPending(false)); }} style={styles.flex} /><AppButton label="Reject" icon="close" variant="secondary" disabled={applicationActionPending} onPress={() => setRejectOpen(true)} style={styles.flex} /></View> : null}
     {!blocked && application.status === "Accepted" && !application.completedAt && onConfirmCompletion ? <View style={styles.applicationActions}><AppButton label={application.completionConfirmedBy?.[role === "Brand" ? "brand" : "creator"] ? "Completion confirmed" : "Confirm completion"} icon="checkmark-circle-outline" loading={applicationActionPending} disabled={applicationActionPending || Boolean(application.completionConfirmedBy?.[role === "Brand" ? "brand" : "creator"])} onPress={() => { setApplicationActionPending(true); void Promise.resolve(onConfirmCompletion()).finally(() => setApplicationActionPending(false)); }} style={styles.flex} /></View> : null}
@@ -614,8 +700,82 @@ export function ChatDetail({
     createdAt: application.submittedAt,
     applicationCardAnchor: true,
   } : undefined;
-  const timelineMessages = applicationAnchor ? mergeChatMessages(messages, [applicationAnchor]) : messages;
+  const allTimelineMessages = applicationAnchor ? mergeChatMessages(messages, [applicationAnchor]) : messages;
+  const timelineMessages = olderHistoryExpanded
+    ? allTimelineMessages
+    : allTimelineMessages.filter((message) => !message.createdAt || new Date(message.createdAt).getTime() >= initialHistoryCutoff || message.applicationCardAnchor);
   const applicationAnchorId = application ? messages.find((message) => message.campaignRequestId === application.id)?.id ?? applicationAnchor?.id : undefined;
+  const selectedMessages = selectedMessageIds.map((id) => messages.find((message) => message.id === id)).filter((message): message is ChatMessage => Boolean(message && !message.deleted));
+  const canBulkDelete = !adminChat && Boolean(onDeleteMessage) && selectedMessages.length > 0 && selectedMessages.every((message) => message.mine);
+  const canForwardMessage = (message: ChatMessage) => !message.deleted && !message.applicationCardAnchor && !message.taskId && !message.campaignRequestId && !message.videoBriefId && !message.attachments?.some((attachment) => attachment.type === "social-review");
+  const toggleSelectedMessage = (message: ChatMessage) => {
+    if (!canForwardMessage(message)) return;
+    if (selectedMessageIds.includes(message.id)) {
+      const next = selectedMessageIds.filter((id) => id !== message.id);
+      setSelectedMessageIds(next);
+      if (!next.length) setForwardPickerOpen(false);
+      return;
+    }
+    if (selectedMessageIds.length >= 5) { setAttachmentError("Select up to 5 messages at a time."); return; }
+    setAttachmentError("");
+    setSelectedMessageIds([...selectedMessageIds, message.id]);
+  };
+  const openForwardPicker = () => {
+    if (!onForwardMessages || !selectedMessages.length || !forwardTargets.length) return;
+    setForwardBatchId(`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    setForwardPickerOpen(true);
+  };
+  const selectMessageAndForward = (message: ChatMessage | null) => {
+    if (!message || !onForwardMessages || !forwardTargets.length || !canForwardMessage(message)) return;
+    if (!selectedMessageIds.includes(message.id) && selectedMessageIds.length >= 5) { setAttachmentError("Select up to 5 messages at a time."); closeMessageActions(); return; }
+    setSelectedMessageIds((current) => current.includes(message.id) ? current : [...current, message.id]);
+    setForwardBatchId(`${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    setForwardPickerOpen(true);
+    closeMessageActions();
+  };
+  const forwardSelectedMessages = async (targetId: string) => {
+    if (!onForwardMessages || forwarding || !selectedMessages.length) return;
+    setForwarding(true);
+    setAttachmentError("");
+    try {
+      await onForwardMessages(targetId, selectedMessages.map(({ id, text, attachments }) => ({ id, text, attachments } as MarketplaceMessage)), forwardBatchId);
+      setForwardPickerOpen(false);
+      setSelectedMessageIds([]);
+      setForwardBatchId("");
+      setAttachmentError("");
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : "Messages could not be forwarded. Try again.");
+    } finally { setForwarding(false); }
+  };
+  const confirmDeleteSelectedMessages = async () => {
+    if (!canBulkDelete || !onDeleteMessage || sendLocked.current) return;
+    sendLocked.current = true;
+    setIsSending(true);
+    const results = await Promise.allSettled(selectedMessages.map((message) => onDeleteMessage(message.id)));
+    const deletedIds = new Set(selectedMessages.filter((_, index) => results[index].status === "fulfilled").map((message) => message.id));
+    if (deletedIds.size) {
+      setMessages((current) => current.map((message) => deletedIds.has(message.id) ? { ...message, deleted: true, text: "This message was deleted", attachments: [], attachmentName: undefined, replyTo: undefined, taskId: undefined, campaignRequestId: undefined, videoBriefId: undefined } : message));
+      setSelectedMessageIds((current) => current.filter((id) => !deletedIds.has(id)));
+    }
+    const failedCount = results.length - deletedIds.size;
+    setAttachmentError(failedCount ? `${deletedIds.size} deleted; ${failedCount} could not be deleted. Try again.` : "");
+    setBulkDeleteOpen(false);
+    sendLocked.current = false;
+    setIsSending(false);
+  };
+  const jumpToReply = (messageId?: string) => {
+    if (!messageId) return;
+    const index = allTimelineMessages.findIndex((message) => message.id === messageId);
+    if (index < 0) { setAttachmentError("Load older messages to find this reply."); return; }
+    setHighlightedMessageId(messageId);
+    if (!olderHistoryExpanded && allTimelineMessages[index].createdAt && new Date(allTimelineMessages[index].createdAt!).getTime() < initialHistoryCutoff) setOlderHistoryExpanded(true);
+    requestAnimationFrame(() => {
+      const scroll = () => threadRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+      try { scroll(); }
+      catch { threadRef.current?.scrollToOffset({ offset: Math.max(0, index * 100), animated: true }); }
+    });
+    setTimeout(() => setHighlightedMessageId((current) => current === messageId ? null : current), 1500);
+  };
   return (
     <Animated.View style={{ flex: 1, opacity: enterProgress, transform: [{ translateY: enterProgress.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }] }}>
     <KeyboardAvoidingView
@@ -665,6 +825,7 @@ export function ChatDetail({
                       : "Offline"}
           </Text>
         </Pressable>
+        {!adminChat && onToggleConversationPin ? <Pressable accessibilityRole="button" accessibilityLabel={isConversationPinned ? `Unpin ${name} chat` : `Pin ${name} chat`} accessibilityState={{ selected: isConversationPinned }} onPress={onToggleConversationPin} style={styles.iconButton}><AppIcon name={isConversationPinned ? "pin" : "pin-outline"} color={isConversationPinned ? theme.colors.primary : theme.colors.textSecondary} /></Pressable> : null}
         {onToggleBlock ? (
           <Pressable
             accessibilityRole="button"
@@ -676,6 +837,13 @@ export function ChatDetail({
           </Pressable>
         ) : null}
       </View>
+      {selectedMessageIds.length ? <View style={styles.selectionToolbar}>
+        <Text style={styles.selectionCount}>{selectedMessageIds.length}/5 selected</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Cancel message selection" onPress={() => setSelectedMessageIds([])} style={styles.selectionIcon}><AppIcon name="close" color={theme.colors.textSecondary} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Forward selected messages" disabled={!onForwardMessages || !forwardTargets.length || forwarding} onPress={openForwardPicker} style={[styles.selectionAction, (!onForwardMessages || !forwardTargets.length) && styles.selectionDisabled]}><AppIcon name="arrow-redo-outline" size={17} color={theme.colors.primary} /><Text style={styles.selectionActionText}>Forward</Text></Pressable>
+        {canBulkDelete ? <Pressable accessibilityRole="button" accessibilityLabel="Delete selected messages" onPress={() => setBulkDeleteOpen(true)} style={styles.selectionAction}><AppIcon name="trash-outline" size={17} color={theme.colors.danger} /><Text style={[styles.selectionActionText, { color: theme.colors.danger }]}>Delete</Text></Pressable> : null}
+      </View> : null}
+      {pinnedMessage ? <Pressable accessibilityRole="button" accessibilityLabel={`Pinned message from ${pinnedMessage.mine ? "you" : name}. Tap to jump to it.`} onPress={() => jumpToReply(pinnedMessage.id)} style={styles.pinnedMessageBanner}><AppIcon name="pin" size={17} color={theme.colors.primary} /><View style={styles.flex}><Text style={styles.pinnedMessageLabel}>Pinned message</Text><Text numberOfLines={1} style={styles.pinnedMessageText}>{pinnedMessage.mine ? "You" : name}: {pinnedMessage.text}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Unpin message" onPress={(event) => { event.stopPropagation(); setPinnedMessage(null); }} style={styles.selectionIcon}><AppIcon name="close" size={16} color={theme.colors.textSecondary} /></Pressable></Pressable> : null}
       <FlatList
         ref={threadRef}
         contentContainerStyle={styles.thread}
@@ -685,15 +853,20 @@ export function ChatDetail({
         initialNumToRender={20}
         windowSize={7}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-        onLayout={() => { if (keepAtBottom.current && messages.length) requestAnimationFrame(() => threadRef.current?.scrollToEnd({ animated: false })); }}
-        onContentSizeChange={() => { if (keepAtBottom.current && messages.length) threadRef.current?.scrollToEnd({ animated: false }); }}
+        onLayout={() => { if ((initialScrollPending.current || keepAtBottom.current) && timelineMessages.length) requestAnimationFrame(() => threadRef.current?.scrollToEnd({ animated: false })); }}
+        onContentSizeChange={() => { if ((initialScrollPending.current || keepAtBottom.current) && timelineMessages.length) threadRef.current?.scrollToEnd({ animated: false }); }}
         onScroll={({ nativeEvent }) => {
+          if (initialScrollPending.current) return;
           keepAtBottom.current = nativeEvent.contentSize.height - nativeEvent.layoutMeasurement.height - nativeEvent.contentOffset.y < 80;
           if (keepAtBottom.current) setNewMessageCount(0);
         }}
+        onScrollToIndexFailed={({ index }) => {
+          threadRef.current?.scrollToOffset({ offset: Math.max(0, index * 100), animated: true });
+          setTimeout(() => threadRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 }), 120);
+        }}
         scrollEventThrottle={100}
         ListHeaderComponent={<>
-        {hasOlderMessages && onLoadOlderMessages ? <AppButton label="Load older messages" compact variant="secondary" loading={historyLoading} disabled={historyLoading} onPress={() => { const oldest = messages.find((message) => message.createdAt); loadingOlderMessages.current = true; olderMessagesBefore.current = oldest?.createdAt ? { createdAt: oldest.createdAt, id: oldest.id } : null; onLoadOlderMessages(); }} /> : null}
+        {hasOlderMessages && onLoadOlderMessages ? <AppButton label="Load older messages" compact variant="secondary" loading={historyLoading} disabled={historyLoading} onPress={() => { setOlderHistoryExpanded(true); const oldest = timelineMessages.find((message) => message.createdAt); loadingOlderMessages.current = true; olderMessagesBefore.current = oldest?.createdAt ? { createdAt: oldest.createdAt, id: oldest.id } : null; onLoadOlderMessages(); }} /> : null}
         {historyError ? <View><Text accessibilityRole="alert" style={styles.attachmentError}>{historyError}</Text>{onRetryHistory ? <AppButton label="Try again" compact onPress={onRetryHistory} /> : null}</View> : null}
         {historyLoading && !messages.length ? <View style={{ gap: 10 }}>{[0, 1, 2].map((key) => <Skeleton key={key} height={48} />)}</View> : null}
         <View style={styles.encryptionNote}>
@@ -712,39 +885,49 @@ export function ChatDetail({
           const previousDay = chatDayLabel(timelineMessages[index - 1]?.createdAt);
           const supportReportType = adminChat ? /^\[(Feedback|Bug report)\]\s*/.exec(message.text)?.[1] : undefined;
           const supportReportBody = supportReportType ? message.text.replace(/^\[(?:Feedback|Bug report)\]\s*/, "") : message.text;
+          const mediaAttachments = message.attachments?.filter((attachment): attachment is ChatAttachment => attachment.type !== "social-review") ?? [];
           const dayDivider = day && day !== previousDay ? <View style={styles.dayDivider}><Text style={styles.dayDividerText}>{day}</Text></View> : null;
           if (message.applicationCardAnchor) return <View>{dayDivider}<View style={styles.applicationRow}>{applicationCard}</View></View>;
           const replyPreview = replyPreviewFor(message);
+          let swipeValue = swipeValues.current.get(message.id);
+          if (!swipeValue) { swipeValue = new Animated.Value(0); swipeValues.current.set(message.id, swipeValue); }
           const replyResponder = PanResponder.create({
-            onMoveShouldSetPanResponder: (_, gesture) => !adminChat && gesture.dx < -16 && Math.abs(gesture.dx) > Math.abs(gesture.dy),
+            onMoveShouldSetPanResponder: (_, gesture) => canMessage && !selectedMessageIds.length && !message.deleted && gesture.dx > 16 && gesture.dx > Math.abs(gesture.dy),
+            onPanResponderMove: (_, gesture) => swipeValue?.setValue(Math.max(0, Math.min(72, gesture.dx))),
             onPanResponderRelease: (_, gesture) => {
-              if (!adminChat && gesture.dx < -64 && !message.deleted) {
+              if (canMessage && gesture.dx > 64 && !message.deleted) {
                 setReplyingTo(message);
                 setEditingMessageId(null);
               }
+              Animated.spring(swipeValue!, { toValue: 0, useNativeDriver: NATIVE_ANIMATIONS_ENABLED, speed: 24, bounciness: 4 }).start();
             },
+            onPanResponderTerminate: () => Animated.spring(swipeValue!, { toValue: 0, useNativeDriver: NATIVE_ANIMATIONS_ENABLED }).start(),
           });
           return <View key={message.id}>{dayDivider}<View style={styles.messageRow} {...replyResponder.panHandlers}>
-          <View style={[styles.messageContent, message.campaignRequestId && styles.messageContentCampaign, message.mine && styles.messageContentMine]}>
+          <Animated.View pointerEvents="none" style={[styles.replySwipeCue, { opacity: swipeValue.interpolate({ inputRange: [0, 20, 64], outputRange: [0, 0.55, 1], extrapolate: "clamp" }) }]}><AppIcon name="return-down-forward-outline" size={18} color={theme.colors.primary} /></Animated.View>
+          <Animated.View style={[styles.messageContent, message.campaignRequestId && styles.messageContentCampaign, message.mine && styles.messageContentMine, { transform: [{ translateX: swipeValue }] }]}>
+          {selectedMessageIds.includes(message.id) ? <View style={styles.selectedIndicator}><AppIcon name="checkmark-circle" size={18} color={theme.colors.primary} /></View> : null}
           <Pressable
             key={message.id}
             accessibilityRole="button"
             accessibilityLabel={`Message from ${message.mine ? "you" : name}`}
-            onPress={() => { if (!adminChat) handleMessagePress(message); }}
+            onPress={() => selectedMessageIds.length ? toggleSelectedMessage(message) : handleMessagePress(message)}
             onLongPress={() => {
-              if (adminChat) return;
+              if (message.deleted || !canMessage) return;
               setSelectedMessage(message);
               setMessageActionMode("actions");
             }}
             delayLongPress={350}
             style={[
               styles.bubble,
+              selectedMessageIds.includes(message.id) && styles.selectedBubble,
+              highlightedMessageId === message.id && styles.replyTargetHighlight,
               (Boolean(replyPreview) || Boolean(message.taskId) || Boolean(message.campaignRequestId) || Boolean(message.videoBriefId) || Boolean(message.attachments?.length)) && styles.richBubble,
               message.mine ? styles.bubbleMine : styles.bubbleOther,
             ]}
           >
             {!message.deleted && replyPreview ? (
-              <View style={[styles.replyPreview, message.mine && styles.replyPreviewMine]}>
+              <Pressable accessibilityRole="button" accessibilityLabel="Jump to replied message" disabled={!message.replyToId} onPress={() => jumpToReply(message.replyToId)} style={[styles.replyPreview, message.mine && styles.replyPreviewMine]}>
                 <AppIcon
                   name="return-down-forward-outline"
                   size={15}
@@ -766,7 +949,7 @@ export function ChatDetail({
                     {replyPreview.text}
                   </Text>
                 </View>
-              </View>
+              </Pressable>
             ) : null}
             {!message.deleted && message.taskId ? (() => {
               const task = tasks.find((item) => item.id === message.taskId);
@@ -803,16 +986,20 @@ export function ChatDetail({
               );
               const status = request.status === "Declined" ? "Rejected" : request.status;
               const canRespond = request.direction === "brand-to-creator" ? role === "Influencer" : role === "Brand";
+              const campaignCover = campaign.media?.find((item) => item.type === "image" && item.uri);
+              const campaignUnavailable = campaign.visibility === "private" || campaign.approvalLimitReached === true;
               return (
                 <View style={[styles.taskMessage, message.mine && styles.taskMessageMine]}>
-                  <View style={styles.videoBriefIcon}><AppIcon name="briefcase-outline" size={18} color={theme.colors.primary} /></View>
                   <View style={styles.flex}>
-                    <Text style={[styles.videoBriefEyebrow, message.mine && styles.bubbleMineText]}>CAMPAIGN REQUEST · {status.toUpperCase()}</Text>
+                    {campaignCover?.uri ? <ExpoImage source={{ uri: campaignCover.uri }} contentFit="cover" style={styles.campaignRequestBanner} accessibilityLabel={`${campaign.title} campaign banner`} /> : <View style={styles.videoBriefIcon}><AppIcon name="briefcase-outline" size={18} color={theme.colors.primary} /></View>}
+                    <Text style={[styles.videoBriefEyebrow, message.mine && styles.bubbleMineText]}>CAMPAIGN REQUEST · {campaign.visibility === "private" ? "PRIVATE" : campaignUnavailable ? "SLOTS FILLED" : status.toUpperCase()}</Text>
                     <Text style={[styles.videoBriefTitle, message.mine && styles.bubbleMineText]}>{campaign.title}</Text>
                     <Text numberOfLines={2} style={[styles.videoBriefMeta, message.mine && styles.bubbleMineText]}>{campaign.budget} · {campaign.description}</Text>
+                    {campaign.applicationCount !== undefined ? <Text style={[styles.videoBriefMeta, message.mine && styles.bubbleMineText]}>{campaign.applicationCount} {campaign.applicationCount === 1 ? "creator applied" : "creators applied"}</Text> : null}
+                    {campaignUnavailable ? <Text style={[styles.videoBriefMeta, message.mine && styles.bubbleMineText]}>{campaign.visibility === "private" ? "This campaign is private now." : "All approved creator slots are filled."}</Text> : null}
                     {!message.mine ? <View style={styles.taskMessageActions}>
-                      <AppButton label="View campaign" compact variant="secondary" style={styles.taskMessageButton} onPress={() => onOpenCampaign?.(campaign)} />
-                      {canRespond && request.status === "Pending" ? <><AppButton label="Accept" compact style={styles.taskMessageButton} onPress={() => onAcceptCampaignRequest?.(request.id)} /><AppButton label="Reject" compact variant="secondary" style={styles.taskMessageButton} onPress={() => onRejectCampaignRequest?.(request.id)} /></> : null}
+                      {!campaignUnavailable ? <AppButton label="View campaign" compact variant="secondary" style={styles.taskMessageButton} onPress={() => onOpenCampaign?.(campaign)} /> : null}
+                      {canRespond && request.status === "Pending" && !campaignUnavailable ? <><AppButton label="Accept" compact style={styles.taskMessageButton} onPress={() => onAcceptCampaignRequest?.(request.id)} /><AppButton label="Reject" compact variant="secondary" style={styles.taskMessageButton} onPress={() => onRejectCampaignRequest?.(request.id)} /></> : null}
                     </View> : null}
                   </View>
                 </View>
@@ -837,11 +1024,20 @@ export function ChatDetail({
                 </Pressable>
               ) : null;
             })() : null}
-            {!message.deleted && message.attachments?.length ? (
+            {!message.deleted && message.attachments?.filter((attachment) => attachment.type === "social-review").map((card) => <View key={card.id} style={[styles.taskMessage, message.mine && styles.taskMessageMine]}>
+              <View style={styles.videoBriefIcon}><AppIcon name="checkmark-circle-outline" size={19} color={theme.colors.primary} /></View>
+              <View style={styles.flex}>
+                <Text style={[styles.videoBriefEyebrow, message.mine && styles.bubbleMineText]}>SOCIAL ACCOUNT REVIEW</Text>
+                <Text style={[styles.videoBriefTitle, message.mine && styles.bubbleMineText]}>{card.platform} · {card.handle}</Text>
+                <Text style={[styles.videoBriefMeta, message.mine && styles.bubbleMineText]}>Review {card.contentType} proof; it must be public and match this account.</Text>
+                {/^https?:\/\//i.test(card.contentUrl ?? "") ? <AppButton label="Open submitted proof" compact variant="secondary" style={styles.taskMessageButton} onPress={() => { void Linking.openURL(card.contentUrl!).catch(() => undefined); }} /> : null}
+              </View>
+            </View>)}
+            {!message.deleted && mediaAttachments.length > 0 ? (
               <ChatAttachmentGrid
-                attachments={message.attachments}
+                attachments={mediaAttachments}
                 mine={message.mine}
-                onOpen={(index) => openMedia(message.attachments ?? [], index)}
+                onOpen={(index) => openMedia(mediaAttachments, index)}
               />
             ) : null}
             {!message.deleted && message.attachmentName && !message.attachments?.length ? (
@@ -910,16 +1106,16 @@ export function ChatDetail({
               ) : null}
             </View>
           </Pressable>
-          {reactions[message.id] ? (() => {
+          {!message.deleted && reactions[message.id] ? (() => {
             const reaction = REACTION_OPTIONS.find((item) => item.key === reactions[message.id]);
             if (!reaction) return null;
             return (
               <View style={[styles.reactionBadge, { backgroundColor: reaction.background }]}>
-                <AppIcon name={reaction.icon} size={15} color={reaction.color} />
+                <Text style={styles.reactionEmoji}>{reaction.emoji}</Text>
               </View>
             );
           })() : null}
-          </View>
+          </Animated.View>
           {applicationCard && message.id === applicationAnchorId ? <View style={styles.applicationRow}>{applicationCard}</View> : null}
           </View></View>;
         }}
@@ -1004,6 +1200,9 @@ export function ChatDetail({
           { paddingBottom: Math.max(insets.bottom, theme.spacing.sm) },
         ]}
       >
+        <Pressable accessibilityRole="button" accessibilityLabel="Insert emoji" onPress={() => setEmojiPickerOpen(true)} style={styles.iconButton}>
+          <AppIcon name="happy-outline" />
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={adminChat ? "Open feedback and report options" : "Open chat actions"}
@@ -1113,6 +1312,7 @@ export function ChatDetail({
             </View>
             <View style={styles.messageActionList}>
               <MessageAction icon="images-outline" label="Photos & videos" onPress={() => { setMediaPickerOpen(false); void addMedia(); }} />
+              <MessageAction icon="sparkles-outline" label="GIF" onPress={() => { setMediaPickerOpen(false); void addGif(); }} />
               <MessageAction icon="document-attach-outline" label="File" onPress={() => { setMediaPickerOpen(false); void addFile(); }} />
             </View>
           </View>
@@ -1187,7 +1387,7 @@ export function ChatDetail({
       </Modal>
       <Modal
         transparent
-        visible={Boolean(selectedMessage && messageActionMode)}
+        visible={Boolean(selectedMessage && !selectedMessage.deleted && messageActionMode)}
         animationType="fade"
         onRequestClose={closeMessageActions}
       >
@@ -1200,14 +1400,10 @@ export function ChatDetail({
           />
           <View style={[styles.messageActionSheet, { paddingBottom: Math.max(insets.bottom, theme.spacing.lg) }]}>
             <View style={styles.messageActionHeader}>
-              <View style={styles.flex}>
-                <Text style={styles.messageActionTitle}>
-                  {messageActionMode === "reactions" ? "React to message" : "Message actions"}
-                </Text>
-                <Text numberOfLines={1} style={styles.messageActionPreview}>
-                  {selectedMessage?.text}
-                </Text>
-              </View>
+              {messageActionMode === "reactions" ? <View style={styles.flex} /> : <View style={styles.flex}>
+                <Text style={styles.messageActionTitle}>Message actions</Text>
+                <Text numberOfLines={1} style={styles.messageActionPreview}>{selectedMessage?.text}</Text>
+              </View>}
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Close message actions"
@@ -1224,15 +1420,16 @@ export function ChatDetail({
                     key={reaction.key}
                     accessibilityRole="button"
                     accessibilityLabel={reaction.label}
+                    accessibilityHint="Add or remove this reaction"
+                    accessibilityState={{ selected: reactions[selectedMessage?.id ?? ""] === reaction.key }}
                     onPress={() => chooseReaction(reaction.key)}
-                    style={styles.reactionOption}
+                    style={({ pressed }) => [
+                      styles.reactionOption,
+                      reactions[selectedMessage?.id ?? ""] === reaction.key && { backgroundColor: reaction.background, borderColor: reaction.color },
+                      pressed && styles.pressed,
+                    ]}
                   >
-                    <AppIcon
-                      name={reaction.icon}
-                      size={22}
-                      color={reaction.color}
-                    />
-                    <Text style={styles.messageActionLabel}>{reaction.label}</Text>
+                    <Text style={styles.reactionOptionEmoji}>{reaction.emoji}</Text>
                   </Pressable>
                 ))}
               </View>
@@ -1243,24 +1440,24 @@ export function ChatDetail({
                   label="Reply"
                   onPress={startReply}
                 />
-                <MessageAction
-                  icon="at-outline"
-                  label={`Mention @${name}`}
-                  onPress={mentionParticipant}
-                />
+                {onForwardMessages && forwardTargets.length && selectedMessage && canForwardMessage(selectedMessage) ? <>
+                  <MessageAction icon="checkbox-outline" label="Select messages" onPress={() => { if (!selectedMessage) return; if (!selectedMessageIds.includes(selectedMessage.id) && selectedMessageIds.length >= 5) { setAttachmentError("Select up to 5 messages at a time."); closeMessageActions(); return; } setSelectedMessageIds((current) => current.includes(selectedMessage.id) ? current : [...current, selectedMessage.id]); closeMessageActions(); }} />
+                  <MessageAction icon="arrow-redo-outline" label="Forward" onPress={() => selectMessageAndForward(selectedMessage)} />
+                </> : null}
                 <MessageAction
                   icon="heart-outline"
                   label="Add reaction"
                   onPress={() => setMessageActionMode("reactions")}
                 />
-                {selectedMessage?.mine ? (
+                {pinStorageKey && selectedMessage ? <MessageAction icon={pinnedMessage?.id === selectedMessage.id ? "pin" : "pin-outline"} label={pinnedMessage?.id === selectedMessage.id ? "Unpin message" : "Pin message"} onPress={() => togglePinnedMessage(selectedMessage)} /> : null}
+                {!adminChat && selectedMessage?.mine && onUpdateMessage ? (
                   <MessageAction
                     icon="create-outline"
                     label="Edit message"
                     onPress={startEdit}
                   />
                 ) : null}
-                {selectedMessage?.mine ? (
+                {!adminChat && selectedMessage?.mine && onDeleteMessage ? (
                   <MessageAction
                     icon="trash-outline"
                     label="Delete message"
@@ -1287,6 +1484,30 @@ export function ChatDetail({
         onCancel={() => setMessageToDelete(null)}
         onConfirm={confirmDeleteMessage}
       />
+      <ConfirmModal
+        visible={bulkDeleteOpen}
+        title={`Delete ${selectedMessages.length} messages?`}
+        message="Only your selected messages will be removed. Messages that fail to delete will stay selected."
+        confirmLabel={isSending ? "Deleting…" : "Delete"}
+        confirmIcon="trash-outline"
+        confirmLoading={isSending}
+        destructive
+        onCancel={() => setBulkDeleteOpen(false)}
+        onConfirm={confirmDeleteSelectedMessages}
+      />
+      <Modal transparent visible={emojiPickerOpen} animationType="fade" onRequestClose={() => setEmojiPickerOpen(false)}>
+        <View style={styles.messageActionOverlay}><Pressable accessibilityRole="button" accessibilityLabel="Close emoji picker" onPress={() => setEmojiPickerOpen(false)} style={styles.messageActionBackdrop} /><View style={styles.emojiPicker}>
+          <View style={styles.messageActionHeader}><Text style={styles.messageActionTitle}>Emoji</Text><Pressable accessibilityRole="button" accessibilityLabel="Close emoji picker" onPress={() => setEmojiPickerOpen(false)} style={styles.contextClose}><AppIcon name="close" color={theme.colors.textSecondary} /></Pressable></View>
+          <View style={styles.emojiGrid}>{["😀", "😂", "🥰", "😍", "😊", "😉", "👍", "👏", "🙏", "❤️", "🔥", "🎉", "✨", "💯", "🤝", "💡", "😮", "😢", "✅", "⭐"].map((emoji) => <Pressable key={emoji} accessibilityRole="button" accessibilityLabel={`Insert ${emoji}`} onPress={() => { setDraft((current) => `${current}${emoji}`); setEmojiPickerOpen(false); requestAnimationFrame(() => composerInputRef.current?.focus()); }} style={styles.emojiOption}><Text style={styles.emojiOptionText}>{emoji}</Text></Pressable>)}</View>
+        </View></View>
+      </Modal>
+      <Modal transparent visible={forwardPickerOpen} animationType="slide" onRequestClose={() => !forwarding && setForwardPickerOpen(false)}>
+        <View style={styles.briefPickerOverlay}><Pressable accessibilityRole="button" accessibilityLabel="Close forward picker" onPress={() => !forwarding && setForwardPickerOpen(false)} style={styles.briefPickerBackdrop} /><View style={[styles.actionPicker, { paddingBottom: Math.max(insets.bottom, theme.spacing.lg) }]}>
+          <View style={styles.messageActionHeader}><View style={styles.flex}><Text style={styles.messageActionTitle}>Forward {selectedMessages.length} message{selectedMessages.length === 1 ? "" : "s"}</Text><Text style={styles.applicationMeta}>Choose an active conversation.</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Close forward picker" disabled={forwarding} onPress={() => setForwardPickerOpen(false)} style={styles.contextClose}><AppIcon name="close" color={theme.colors.textSecondary} /></Pressable></View>
+          <ScrollView style={styles.forwardTargetsList} contentContainerStyle={styles.briefPickerList}>{forwardTargets.map((target) => <Pressable key={target.id} accessibilityRole="button" accessibilityLabel={`Forward to ${target.name}`} disabled={forwarding} onPress={() => void forwardSelectedMessages(target.id)} style={[styles.briefPickerItem, forwarding && styles.pickerItemDisabled]}><View style={styles.videoBriefIcon}><AppIcon name="chatbubble-ellipses-outline" color={theme.colors.primary} /></View><View style={styles.flex}><Text style={styles.videoBriefTitle}>{target.name}</Text><Text numberOfLines={1} style={styles.videoBriefMeta}>{target.preview || "Conversation"}</Text></View>{forwarding ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <AppIcon name="arrow-redo-outline" color={theme.colors.primary} />}</Pressable>)}</ScrollView>
+          {!forwardTargets.length ? <Text style={styles.applicationMeta}>No other active conversations are available.</Text> : null}
+        </View></View>
+      </Modal>
       <ConfirmModal
         visible={blockConfirmOpen}
         title={`Block ${name}?`}
@@ -1756,6 +1977,15 @@ const makeStyles = (theme: AppTheme) =>
       paddingBottom: theme.spacing.xl,
       backgroundColor: theme.colors.background,
     },
+    selectionToolbar: { width: "100%", flexDirection: "row", alignItems: "center", gap: theme.spacing.xs, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, backgroundColor: theme.colors.surfaceRaised, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
+    selectionCount: { flex: 1, color: theme.colors.textPrimary, fontSize: theme.type.caption, fontWeight: "800" },
+    selectionIcon: { width: 38, height: 38, alignItems: "center", justifyContent: "center", borderRadius: theme.radius.pill },
+    selectionAction: { minHeight: 38, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: theme.spacing.xs, paddingHorizontal: theme.spacing.sm, borderRadius: theme.radius.md, backgroundColor: theme.colors.surfaceMuted },
+    selectionActionText: { color: theme.colors.primary, fontSize: theme.type.caption, fontWeight: "800" },
+    selectionDisabled: { opacity: 0.45 },
+    pinnedMessageBanner: { minHeight: 52, width: "100%", flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, borderBottomWidth: 1, borderBottomColor: theme.colors.border, backgroundColor: theme.colors.surfaceRaised },
+    pinnedMessageLabel: { color: theme.colors.primary, fontSize: theme.type.caption, fontWeight: "800" },
+    pinnedMessageText: { color: theme.colors.textPrimary, fontSize: theme.type.caption },
     newMessagesButton: {
       position: "absolute",
       zIndex: 2,
@@ -1777,7 +2007,8 @@ const makeStyles = (theme: AppTheme) =>
       minWidth: 0,
       flexShrink: 1,
       borderRadius: 18,
-      padding: theme.spacing.sm,
+      paddingHorizontal: theme.spacing.md,
+      paddingVertical: theme.spacing.sm,
     },
     richBubble: { width: "100%", overflow: "hidden" },
     bubbleOther: {
@@ -1792,6 +2023,8 @@ const makeStyles = (theme: AppTheme) =>
       backgroundColor: theme.colors.primary,
       borderBottomRightRadius: 6,
     },
+    selectedBubble: { borderWidth: 2, borderColor: theme.colors.focus },
+    replyTargetHighlight: { borderWidth: 3, borderColor: theme.colors.focus },
     messageText: {
       maxWidth: "100%",
       flexShrink: 1,
@@ -1801,7 +2034,9 @@ const makeStyles = (theme: AppTheme) =>
       lineHeight: theme.type.lineHeight.body,
     },
     messageRow: { width: "100%", alignItems: "stretch" },
+    replySwipeCue: { position: "absolute", left: 2, top: "50%", width: 30, height: 30, marginTop: -15, alignItems: "center", justifyContent: "center", borderRadius: theme.radius.pill, backgroundColor: theme.colors.surfaceRaised, zIndex: 1 },
     messageContent: { maxWidth: "92%", minWidth: 0, alignSelf: "flex-start" },
+    selectedIndicator: { position: "absolute", right: -8, top: -8, zIndex: 2, borderRadius: theme.radius.pill, backgroundColor: theme.colors.background },
     messageContentMine: { alignSelf: "flex-end" },
     messageContentCampaign: { width: "88%", maxWidth: 340 },
     deletedMessage: { color: theme.colors.textSecondary, fontStyle: "italic" },
@@ -1864,6 +2099,8 @@ const makeStyles = (theme: AppTheme) =>
       borderWidth: 2,
       borderColor: theme.colors.background,
     },
+    reactionEmoji: { fontSize: 15, lineHeight: 18 },
+    reactionOptionEmoji: { fontSize: 23, lineHeight: 28 },
     attachment: {
       flexDirection: "row",
       gap: theme.spacing.sm,
@@ -1964,6 +2201,7 @@ const makeStyles = (theme: AppTheme) =>
       justifyContent: "center",
       backgroundColor: theme.colors.surfaceRaised,
     },
+    campaignRequestBanner: { width: "100%", height: 104, marginBottom: theme.spacing.sm, borderRadius: theme.radius.sm, backgroundColor: theme.colors.surfaceRaised },
     videoBriefEyebrow: { color: theme.colors.primary, fontSize: 10, fontWeight: "800" },
     videoBriefTitle: { color: theme.colors.textPrimary, fontSize: theme.type.body, lineHeight: 20, fontWeight: "800", maxWidth: "100%", flexShrink: 1, minWidth: 0 },
     videoBriefMeta: { color: theme.colors.textSecondary, fontSize: theme.type.caption, lineHeight: 17, maxWidth: "100%", flexShrink: 1, minWidth: 0 },
@@ -1971,6 +2209,7 @@ const makeStyles = (theme: AppTheme) =>
     briefPickerBackdrop: { ...StyleSheet.absoluteFill, backgroundColor: theme.colors.overlay },
     briefPicker: { maxHeight: "72%", padding: theme.spacing.lg, gap: theme.spacing.md, borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg, backgroundColor: theme.colors.surfaceRaised },
     actionPicker: { padding: theme.spacing.lg, gap: theme.spacing.md, borderTopLeftRadius: theme.radius.lg, borderTopRightRadius: theme.radius.lg, backgroundColor: theme.colors.surfaceRaised },
+    forwardTargetsList: { maxHeight: 380 },
     briefPickerList: { gap: theme.spacing.sm, paddingBottom: theme.spacing.sm },
     briefPickerItem: { flexDirection: "row", alignItems: "center", gap: theme.spacing.sm, padding: theme.spacing.sm, borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
     pickerItemDisabled: { opacity: 0.58 },
@@ -2267,18 +2506,22 @@ const makeStyles = (theme: AppTheme) =>
     reactionOptions: {
       flexDirection: "row",
       flexWrap: "wrap",
+      justifyContent: "center",
       gap: theme.spacing.sm,
     },
     reactionOption: {
-      minWidth: 120,
-      flexGrow: 1,
-      minHeight: 56,
-      flexDirection: "row",
+      width: 48,
+      height: 48,
       alignItems: "center",
-      gap: theme.spacing.sm,
-      paddingHorizontal: theme.spacing.sm,
-      borderRadius: theme.radius.md,
+      justifyContent: "center",
+      borderWidth: 1,
+      borderColor: theme.colors.border,
+      borderRadius: theme.radius.lg,
       backgroundColor: theme.colors.surfaceMuted,
     },
+    emojiPicker: { width: "90%", maxWidth: 380, padding: theme.spacing.md, gap: theme.spacing.md, borderRadius: theme.radius.lg, backgroundColor: theme.colors.surfaceRaised },
+    emojiGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: theme.spacing.xs },
+    emojiOption: { width: 48, height: 48, alignItems: "center", justifyContent: "center", borderRadius: theme.radius.md, backgroundColor: theme.colors.surfaceMuted },
+    emojiOptionText: { fontSize: 26 },
     pressed: { opacity: 0.78 },
   });

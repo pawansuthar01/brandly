@@ -2,6 +2,7 @@ import { BadRequestException, Body, Controller, ForbiddenException, Get, Inject,
 import { AuthGuard } from "../../common/auth/auth.guard.js";
 import { CurrentUser } from "../../common/auth/current-user.decorator.js";
 import type { AuthPrincipal } from "../../common/auth/auth.types.js";
+import { UserRole } from "@prisma/client";
 import { ContentVerificationDto, ProfileDirectoryQueryDto, ProfileInteractionDto, ReviewContentVerificationDto, ReviewSocialAccountDto, SocialAccountDto, UpdateProfileDto } from "./profiles.dto.js";
 import { ProfilesService } from "./profiles.service.js";
 
@@ -57,7 +58,7 @@ export class ProfilesController {
     @Param("accountId") accountId: string,
     @Body() dto: ContentVerificationDto,
   ) {
-    return this.profiles.requestSocialVerification(user.userId, accountId, dto);
+    return this.profiles.requestSocialVerification(user.userId, user.role as UserRole, accountId, dto);
   }
 
   @UseGuards(AuthGuard)
@@ -78,10 +79,29 @@ export class ProfilesController {
   }
 
   @UseGuards(AuthGuard)
+  @Get("admin/social-review-users")
+  adminSocialReviewUsers(@CurrentUser() user: AuthPrincipal, @Query("take") take?: string, @Query("offset") offset?: string, @Query("q") query?: string) {
+    this.assertAdmin(user);
+    const parsedTake = take === undefined ? 25 : Number(take);
+    const parsedOffset = offset === undefined ? 0 : Number(offset);
+    if (!Number.isInteger(parsedTake) || parsedTake < 1 || parsedTake > 100) throw new BadRequestException("take must be between 1 and 100");
+    if (!Number.isInteger(parsedOffset) || parsedOffset < 0) throw new BadRequestException("offset must be a non-negative integer");
+    if (query && query.length > 160) throw new BadRequestException("q must be 160 characters or fewer");
+    return this.profiles.listSocialReviewUsers(parsedTake, parsedOffset, query);
+  }
+
+  @UseGuards(AuthGuard)
+  @Get("admin/social-review-users/:userId")
+  adminSocialReviewUser(@CurrentUser() user: AuthPrincipal, @Param("userId", new ParseUUIDPipe()) userId: string) {
+    this.assertAdmin(user);
+    return this.profiles.getAdminSocialReviewUser(userId);
+  }
+
+  @UseGuards(AuthGuard)
   @Patch("admin/social-reviews/:accountId")
   reviewSocialAccount(@CurrentUser() user: AuthPrincipal, @Param("accountId", new ParseUUIDPipe()) accountId: string, @Body() dto: ReviewSocialAccountDto) {
     this.assertAdmin(user);
-    return this.profiles.reviewSocialAccount(accountId, user.userId);
+    return this.profiles.reviewSocialAccount(accountId, user.userId, dto.followerCount);
   }
 
   @UseGuards(AuthGuard)

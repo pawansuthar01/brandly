@@ -19,6 +19,7 @@
     "test:reminders": "node scripts/test-reminders.cjs",
     "test:chat": "node scripts/test-chat.cjs",
     "test:social-reviews": "tsx scripts/test-social-reviews.ts",
+    "test:analytics": "tsx scripts/test-analytics.ts",
     "test:notifications:admin": "tsx scripts/test-notifications-admin.ts",
     "test:themes": "tsx scripts/test-themes.ts",
     "test:themes:http": "node --env-file=.env --import tsx scripts/test-themes-http.ts",

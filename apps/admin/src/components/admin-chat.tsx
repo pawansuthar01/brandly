@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowDown, CheckCheck, Circle, FileText, Image as ImageIcon, LoaderCircle, MessageCircle, Paperclip, Search, SearchX, Send, UserRound } from 'lucide-react';
+import { ArrowDown, BadgeCheck, CheckCheck, Circle, ExternalLink, FileText, Image as ImageIcon, LoaderCircle, Maximize2, MessageCircle, Minimize2, Paperclip, Search, SearchX, Send, UserRound, Video } from 'lucide-react';
 import { getAdminChatMessages, getAdminChatSocketUrl, getAdminChatUsers, heartbeatAdminChat, markAdminChatRead, openAdminChat, resolveAdminMediaUrl, sendAdminChatMessage, uploadAdminChatAttachment, type AdminChatMessage, type AdminChatSnapshot, type AdminChatUser } from '@/services/adminApi.service';
 import styles from './admin-chat.module.css';
 
@@ -19,12 +19,15 @@ export function AdminChatPage() {
   const [error, setError] = useState('');
   const [listError, setListError] = useState('');
   const conversationRef = useRef<string | null>(null);
+  const openRequestRef = useRef(0);
+  const workspaceRef = useRef<HTMLElement>(null);
   const requestedUserOpened = useRef('');
   const requestedUserId = useRef<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const followMessagesRef = useRef(true);
   const previousMessageCountRef = useRef<{ conversationId: string | null; count: number }>({ conversationId: null, count: 0 });
   const [newMessageCount, setNewMessageCount] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   conversationRef.current = thread?.conversationId ?? null;
 
@@ -41,17 +44,32 @@ export function AdminChatPage() {
   useEffect(() => { if (requestedUserId.current === null) requestedUserId.current = new URLSearchParams(window.location.search).get('user'); const timer = window.setTimeout(() => void loadUsers(query || requestedUserId.current || ''), 250); return () => window.clearTimeout(timer); }, [loadUsers, query]);
 
   const openThread = useCallback(async (user: AdminChatUser) => {
+    const requestId = ++openRequestRef.current;
     setSelected(user); setError(''); setLoadingThread(true); setThread(null); setText('');
     try {
       const opened = await openAdminChat(user.id);
       const snapshot = await getAdminChatMessages(opened.conversationId);
+      if (requestId !== openRequestRef.current) return;
       setThread(snapshot);
       setUsers((current) => current.map((item) => item.id === user.id ? { ...item, conversationId: snapshot.conversationId, unreadCount: 0 } : item));
       await markAdminChatRead(snapshot.conversationId);
       void heartbeatAdminChat(snapshot.conversationId).catch(() => undefined);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Conversation could not be opened.'); }
-    finally { setLoadingThread(false); }
+    } catch (cause) { if (requestId === openRequestRef.current) setError(cause instanceof Error ? cause.message : 'Conversation could not be opened.'); }
+    finally { if (requestId === openRequestRef.current) setLoadingThread(false); }
   }, []);
+
+  useEffect(() => {
+    const updateFullscreen = () => setIsFullscreen(document.fullscreenElement === workspaceRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement === workspaceRef.current) await document.exitFullscreen();
+      else await workspaceRef.current?.requestFullscreen();
+    } catch { setError('Fullscreen mode is unavailable in this browser.'); }
+  };
 
   useEffect(() => {
     const userId = new URLSearchParams(window.location.search).get('user');
@@ -147,7 +165,7 @@ export function AdminChatPage() {
       const attachments = await Promise.all(files.map(uploadAdminChatAttachment));
       const saved = await sendAdminChatMessage(thread.conversationId, content, crypto.randomUUID(), attachments);
       setThread((current) => current && !current.messages.some((item) => item.id === saved.id) ? { ...current, messages: [...current.messages, saved] } : current);
-      setUsers((current) => current.map((user) => user.id === selected?.id ? { ...user, preview: saved.text, updatedAt: saved.createdAt, conversationId: thread.conversationId } : user));
+      setUsers((current) => current.map((user) => user.id === selected?.id ? { ...user, preview: saved.text || (saved.attachments?.length ? 'Sent an attachment' : ''), updatedAt: saved.createdAt, conversationId: thread.conversationId } : user));
       setText('');
       setFiles([]);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Message could not be sent.'); }
@@ -155,8 +173,8 @@ export function AdminChatPage() {
   };
 
   return <main className={styles.page}>
-    <header className={styles.header}><div><span className={styles.eyebrow}>Operations</span><h1><MessageCircle size={22} /> User chats</h1><p>Private messages, media, and files with marketplace users.</p></div></header>
-    <section className={styles.workspace}>
+    <header className={styles.header}><div><span className={styles.eyebrow}>Operations</span><h1><MessageCircle size={22} /> User chats</h1><p>Private messages, media, and files with marketplace users.</p></div><button type="button" className={styles.fullscreenButton} onClick={() => void toggleFullscreen()} title={isFullscreen ? 'Exit fullscreen' : 'Open chats fullscreen'} aria-label={isFullscreen ? 'Exit fullscreen' : 'Open chats fullscreen'}>{isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}<span>{isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}</span></button></header>
+    <section className={styles.workspace} ref={workspaceRef}>
       <aside className={styles.contacts}>
         <div className={styles.contactsHeader}><strong><UserRound size={16} /> All users</strong><span>{users.length}{nextOffset !== null ? '+' : ''}</span></div>
         <label className={styles.search}><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search name or email" /></label>
@@ -173,8 +191,8 @@ export function AdminChatPage() {
         </div>
       </aside>
       <section className={styles.thread} aria-label="Conversation">
-        {!selected ? <div className={styles.empty}><span className={styles.emptyIcon}><MessageCircle size={25} /></span><strong>Your conversations</strong><span>Select a user on the left to open or start a private chat.</span></div> : <>
-          <header className={styles.threadHeader}><span className={styles.avatar}>{selected.name.slice(0, 1).toUpperCase()}{selected.avatarUrl && <img src={resolveAdminMediaUrl(selected.avatarUrl)} alt="" onError={(event) => event.currentTarget.remove()} />}</span><div><strong>{selected.name}</strong><span>{thread?.online ? 'Online' : 'Offline'} · {selected.role}</span></div></header>
+        {!selected ? <div className={styles.empty}><span className={styles.emptyIcon}><MessageCircle size={25} /></span><strong>Choose a conversation</strong><span>Search the user list, then select someone to view or start a private chat.</span><small>Messages and shared files stay in this conversation.</small></div> : <>
+          <header className={styles.threadHeader}><span className={styles.avatar}>{selected.name.slice(0, 1).toUpperCase()}{selected.avatarUrl && <img src={resolveAdminMediaUrl(selected.avatarUrl)} alt="" onError={(event) => event.currentTarget.remove()} />}</span><div><strong>{selected.name}</strong><span><i className={`${styles.onlineDot} ${thread?.online ? styles.online : ''}`} />{thread?.online ? 'Online' : 'Offline'} · {selected.role}</span></div></header>
           <div className={styles.messagePane}>
           <div className={styles.messages} ref={scrollRef} onScroll={(event) => {
             const pane = event.currentTarget;
@@ -182,11 +200,12 @@ export function AdminChatPage() {
             if (followMessagesRef.current) setNewMessageCount(0);
           }}>
             {loadingThread && <div className={styles.state}><LoaderCircle className={styles.spin} size={18} /> Loading conversation…</div>}
+            {!loadingThread && !thread && <div className={styles.emptyThread}><span className={styles.emptyThreadIcon}><MessageCircle size={20} /></span><strong>Conversation unavailable</strong><span>{error || 'Could not load this conversation.'}</span><button type="button" className={styles.retryButton} onClick={() => void openThread(selected)}>Try again</button></div>}
             {!loadingThread && thread?.messages.length === 0 && <div className={styles.emptyThread}><span className={styles.emptyThreadIcon}><MessageCircle size={20} /></span><strong>Start a conversation</strong><span>Send {selected.name} a message. Replies will show here.</span></div>}
             {thread?.messages.map((message) => <article key={message.id} className={`${styles.message} ${message.mine ? styles.messageMine : ''}`}>
               {/^(\[Feedback\]|\[Bug report\])/.test(message.text) && <strong className={styles.reportLabel}>{message.text.startsWith('[Bug report]') ? 'Bug report' : 'Feedback'}</strong>}
               {message.text && <p>{message.text.replace(/^\[(?:Feedback|Bug report)\]\s*/, '')}</p>}
-              {message.attachments?.map((attachment) => attachment.type === 'image' ? <a key={attachment.id} className={styles.messageAttachment} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer"><img src={resolveAdminMediaUrl(attachment.uri)} alt={attachment.name} onLoad={keepLatestVisible} onError={(event) => event.currentTarget.remove()} /><span><ImageIcon size={13} />{attachment.name}</span></a> : attachment.type === 'video' ? <video key={attachment.id} className={styles.messageVideo} src={resolveAdminMediaUrl(attachment.uri)} controls preload="metadata" onLoadedMetadata={keepLatestVisible} /> : <a key={attachment.id} className={styles.fileAttachment} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer"><FileText size={17} /><span>{attachment.name}</span></a>)}
+              {message.attachments?.map((attachment) => attachment.type === 'social-review' ? <div key={attachment.id} className={styles.socialReviewCard}><BadgeCheck size={18} /><div><strong>Social account verification</strong><span>{attachment.platform} · {attachment.handle}</span><small>Review {attachment.contentType} proof; confirm it is public and matches this account.</small></div>{/^https?:\/\//i.test(attachment.contentUrl) && <a href={attachment.contentUrl} target="_blank" rel="noreferrer" aria-label="Open submitted proof"><ExternalLink size={14} /></a>}</div> : attachment.type === 'image' ? <a key={attachment.id} className={styles.messageAttachment} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer"><img src={resolveAdminMediaUrl(attachment.uri)} alt={attachment.name} onLoad={keepLatestVisible} onError={(event) => event.currentTarget.remove()} /><span><ImageIcon size={13} />{attachment.name}</span></a> : attachment.type === 'video' ? <video key={attachment.id} className={styles.messageVideo} src={resolveAdminMediaUrl(attachment.uri)} controls preload="metadata" onLoadedMetadata={keepLatestVisible} /> : <a key={attachment.id} className={styles.fileAttachment} href={resolveAdminMediaUrl(attachment.uri)} target="_blank" rel="noreferrer"><FileText size={17} /><span>{attachment.name}</span></a>)}
               <small>{message.time}{message.mine && <>{' · '}{message.status === 'seen' ? <><CheckCheck size={13} /> Seen</> : 'Delivered'}</>}</small>
             </article>)}
             {error && <div className={styles.error} role="alert">{error}</div>}
@@ -196,10 +215,11 @@ export function AdminChatPage() {
           <form className={styles.composer} onSubmit={(event) => { event.preventDefault(); void send(); }}>
             <input hidden ref={fileInputRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.txt,.xlsx,.csv" onChange={(event) => { const selectedFiles = Array.from(event.target.files ?? []); const available = 12 - files.length; if (selectedFiles.length > available) setError(`You can attach ${available} more file${available === 1 ? '' : 's'} (12 per message).`); else { setError(''); setFiles((current) => [...current, ...selectedFiles]); } event.currentTarget.value = ''; }} />
             <button type="button" className={styles.attachButton} aria-label="Attach media or file" title={files.length ? `${files.length} of 12 attachments` : 'Attach photos, videos, or files'} onClick={() => fileInputRef.current?.click()} disabled={sending || loadingThread || files.length >= 12}><Paperclip size={17} /></button>
-            <textarea value={text} onChange={(event) => setText(event.target.value)} placeholder={`Message ${selected.name}`} maxLength={5000} rows={2} disabled={loadingThread} />
-            <button type="submit" disabled={(!text.trim() && !files.length) || sending || loadingThread} aria-label="Send message">{sending ? <LoaderCircle className={styles.spin} size={17} /> : <Send size={17} />}</button>
+            <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); } }} placeholder={`Message ${selected.name}`} maxLength={5000} rows={2} disabled={loadingThread || !thread} aria-label={`Message ${selected.name}`} />
+            <button type="submit" disabled={(!text.trim() && !files.length) || sending || loadingThread || !thread} aria-label="Send message" title="Send message (Enter)">{sending ? <LoaderCircle className={styles.spin} size={17} /> : <Send size={17} />}</button>
           </form>
-          {files.length > 0 && <div className={styles.stagedFiles} aria-label={`${files.length} attachments selected`}><span className={styles.attachmentCount}>{files.length}/12</span>{files.map((file, index) => <button key={`${file.name}-${index}`} type="button" onClick={() => setFiles((current) => current.filter((_, itemIndex) => index !== itemIndex))} title={`Remove ${file.name}`} aria-label={`Remove ${file.name}`}><FileText size={14} /><span>{file.name}</span><b>×</b></button>)}</div>}
+          <div className={styles.keyboardHint}>Enter to send <kbd>Enter</kbd><span>·</span> new line <kbd>Shift</kbd> + <kbd>Enter</kbd></div>
+          {files.length > 0 && <div className={styles.stagedFiles} aria-label={`${files.length} attachments selected`}><span className={styles.attachmentCount}>{files.length}/12</span>{files.map((file, index) => { const AttachmentIcon = file.type.startsWith('image/') ? ImageIcon : file.type.startsWith('video/') ? Video : FileText; return <button key={`${file.name}-${index}`} type="button" onClick={() => setFiles((current) => current.filter((_, itemIndex) => index !== itemIndex))} title={`Remove ${file.name}`} aria-label={`Remove ${file.name}`}><AttachmentIcon size={14} /><span>{file.name}</span><b>×</b></button>; })}</div>}
         </>}
       </section>
     </section>

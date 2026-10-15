@@ -11,7 +11,10 @@ import { ChatRealtimeService } from "./chat.realtime.js";
 
 const PRESENCE_TTL = 75;
 const threadInclude = { user: { select: { id: true, role: true, email: true, profile: { select: { displayName: true, avatarUrl: true, city: true } } } } } as const;
-const messageInclude = { sender: { select: { id: true, role: true, profile: { select: { displayName: true } } } } } as const;
+const messageInclude = {
+  sender: { select: { id: true, role: true, profile: { select: { displayName: true } } } },
+  replyTo: { select: { id: true, text: true, attachments: true, senderRole: true, sender: { select: { profile: { select: { displayName: true } } } } } },
+} as const;
 type Thread = Prisma.AdminChatConversationGetPayload<{ include: typeof threadInclude }>;
 type Message = Prisma.AdminChatMessageGetPayload<{ include: typeof messageInclude }>;
 const MAX_ADMIN_CHAT_ATTACHMENTS = 12;
@@ -92,25 +95,55 @@ export class AdminChatService {
     return this.serializeThread(thread, admin.userId, online);
   }
 
-  async messages(user: AuthPrincipal, conversationId: string, before?: string) {
-    const thread = await this.authorizedThread(user, conversationId);
-    if (before && !isUUID(before)) throw new BadRequestException("Invalid message cursor");
-    const cursor = before ? await this.prisma.adminChatMessage.findFirst({ where: { id: before, conversationId }, select: { id: true, createdAt: true } }) : null;
-    if (before && !cursor) throw new BadRequestException("Message cursor not found");
-    const rows = await this.prisma.adminChatMessage.findMany({ where: { conversationId, ...(cursor ? { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] } : {}) }, include: messageInclude, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 31 });
-    const hasMore = rows.length > 30;
-    const page = rows.slice(0, 30).reverse();
-    const online = user.role === "ADMIN" ? (await this.onlineIds([thread.userId])).has(thread.userId) : (await this.onlineIds(this.configuredAdminIds())).size > 0;
-    return { ...this.serializeThread(thread, user.userId, online), messages: page.map((item) => this.serializeMessage(item, user.role)), hasMore, nextCursor: hasMore ? page[0]?.id : undefined };
+  async sendNotificationMessage(admin: AuthPrincipal, userId: string, text: string, notificationId: string) {
+    this.assertAdmin(admin);
+    if (!isUUID(notificationId)) throw new BadRequestException("Invalid notification ID");
+    const thread = await this.openForAdmin(admin, userId);
+    return this.sendMessage(admin, thread.conversationId, text, `notification:${notificationId}`);
   }
 
-  async send(user: AuthPrincipal, conversationId: string, text = "", clientMessageId?: string, inputAttachments?: Record<string, unknown>[]) {
+  async messages(user: AuthPrincipal, conversationId: string, before?: string) {
+    const thread = await this.authorizedThread(user, conversationId);
+    const recentCutoff = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    if (before && before !== "older" && !isUUID(before)) throw new BadRequestException("Invalid message cursor");
+    const cursor = before && before !== "older" ? await this.prisma.adminChatMessage.findFirst({ where: { id: before, conversationId }, select: { id: true, createdAt: true } }) : null;
+    if (before && before !== "older" && !cursor) throw new BadRequestException("Message cursor not found");
+    const olderWindow = before === "older" || Boolean(cursor && cursor.createdAt < recentCutoff);
+    const rows = await this.prisma.adminChatMessage.findMany({ where: { conversationId, ...(olderWindow ? { createdAt: { lt: recentCutoff } } : { createdAt: { gte: recentCutoff } }), ...(cursor ? { OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] } : {}) }, include: messageInclude, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 31 });
+    const hasOlderHistory = !olderWindow && rows.length <= 30
+      && Boolean(await this.prisma.adminChatMessage.findFirst({ where: { conversationId, createdAt: { lt: recentCutoff } }, select: { id: true } }));
+    const hasMore = rows.length > 30 || hasOlderHistory;
+    const page = rows.slice(0, 30).reverse();
+    const online = user.role === "ADMIN" ? (await this.onlineIds([thread.userId])).has(thread.userId) : (await this.onlineIds(this.configuredAdminIds())).size > 0;
+    return { ...this.serializeThread(thread, user.userId, online), messages: page.map((item) => this.serializeMessage(item, user.role)), hasMore, nextCursor: rows.length > 30 ? page[0]?.id : hasOlderHistory ? "older" : undefined };
+  }
+
+  async send(user: AuthPrincipal, conversationId: string, text = "", clientMessageId?: string, inputAttachments?: Record<string, unknown>[], replyToId?: string) {
+    return this.sendMessage(user, conversationId, text, clientMessageId, inputAttachments, false, true, replyToId);
+  }
+
+  async sendSocialReviewCard(user: AuthPrincipal, input: { requestId: string; accountId: string; platform: string; handle: string; contentType: string; contentUrl: string }) {
+    this.assertUser(user);
+    if (!isUUID(input.requestId)) throw new BadRequestException("Invalid social review request ID");
+    const thread = await this.openForUser(user);
+    return this.sendMessage(user, thread.conversationId, `Social account verification · ${input.platform} ${input.handle}`, `social-verification:${input.requestId}`, [{
+      id: `social-review-${input.requestId}`, name: `${input.platform} account review`, type: "social-review",
+      accountId: input.accountId, platform: input.platform, handle: input.handle,
+      contentType: input.contentType, contentUrl: input.contentUrl,
+    }], true);
+  }
+
+  private async sendMessage(user: AuthPrincipal, conversationId: string, text = "", clientMessageId?: string, inputAttachments?: Record<string, unknown>[], allowSocialReview = false, sendChatPushNotification = true, replyToId?: string) {
     const thread = await this.authorizedThread(user, conversationId);
     const content = text.trim();
-    const attachments = this.normalizeAttachments(inputAttachments);
+    const attachments = this.normalizeAttachments(inputAttachments, allowSocialReview);
     if ((!content && !attachments.length) || content.length > 5_000) throw new BadRequestException("Add a message or attachment (up to 5000 characters)");
     const clientId = clientMessageId?.trim() || randomUUID();
     if (clientId.length > 120) throw new BadRequestException("Invalid client message ID");
+    if (replyToId) {
+      const repliedMessage = await this.prisma.adminChatMessage.findFirst({ where: { id: replyToId, conversationId }, select: { id: true } });
+      if (!repliedMessage) throw new BadRequestException("The replied message is not part of this chat");
+    }
     const role = user.role as UserRole;
     // Config-based admin principals use `admin:<email>`, but message.senderId
     // is a UUID foreign key. Attribute storage to the thread owner and use the
@@ -120,7 +153,7 @@ export class AdminChatService {
     const existing = await this.prisma.adminChatMessage.findUnique({ where: { conversationId_senderId_clientMessageId: { conversationId, senderId, clientMessageId: storedClientId } }, include: messageInclude });
     if (existing) return this.serializeMessage(existing, role);
     const saved = await this.prisma.$transaction(async (tx) => {
-      const message = await tx.adminChatMessage.create({ data: { conversationId, senderId, senderRole: role, clientMessageId: storedClientId, text: content, attachments: attachments as Prisma.InputJsonValue }, include: messageInclude });
+      const message = await tx.adminChatMessage.create({ data: { conversationId, senderId, senderRole: role, clientMessageId: storedClientId, text: content, attachments: attachments as Prisma.InputJsonValue, ...(replyToId ? { replyToId } : {}) }, include: messageInclude });
       await tx.adminChatConversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
       return message;
     });
@@ -131,7 +164,7 @@ export class AdminChatService {
     this.realtime.send(user.userId, { type: "message.created", channel: "ADMIN_CHAT", conversationId, message: this.serializeMessage(saved, role) });
     const recipients = role === UserRole.ADMIN ? [thread.userId] : await this.persistedAdminIds();
     const preview = attachments.find((attachment) => attachment.type === "image") ?? attachments[0];
-    void Promise.all(recipients.map((recipientId) => this.notifications.create(recipientId, {
+    if (sendChatPushNotification) void Promise.all(recipients.map((recipientId) => this.notifications.create(recipientId, {
       type: "CHAT_MESSAGE", title: user.role === "ADMIN" ? "Brandly" : this.senderName(saved), body: (content || this.attachmentPreview(attachments) || "Sent an attachment").slice(0, 240),
       data: { type: "CHAT_MESSAGE", screen: "chat", adminChat: "true", conversationId, ...(preview ? { mediaUri: preview.uri, mediaType: preview.type, mediaName: preview.name } : {}) }, channelId: "chat-messages", dedupeKey: `admin-chat:${saved.id}:${recipientId}`, channels: ["PUSH"],
     }))).catch(() => undefined);
@@ -148,25 +181,44 @@ export class AdminChatService {
     return { read: result.count };
   }
 
-  async reports(type = "ALL", before?: string, requestedTake = 25) {
+  async reports(type = "ALL", query = "", requestedTake = 25, requestedOffset = 0) {
     const normalizedType = type.trim().toUpperCase();
     if (!["ALL", "FEEDBACK", "BUG_REPORT"].includes(normalizedType)) throw new BadRequestException("Report type must be ALL, FEEDBACK, or BUG_REPORT");
     const take = Math.min(100, Math.max(1, Math.floor(requestedTake) || 25));
-    const cursor = before ? await this.prisma.adminChatMessage.findFirst({ where: { id: before }, select: { id: true, createdAt: true } }) : null;
-    if (before && !cursor) throw new BadRequestException("Report cursor not found");
+    const skip = Math.max(0, Math.floor(requestedOffset) || 0);
     const reportTypes = normalizedType === "ALL" ? ["Feedback", "Bug report"] : [normalizedType === "FEEDBACK" ? "Feedback" : "Bug report"];
-    const rows = await this.prisma.adminChatMessage.findMany({
-      where: { AND: [
+    const search = query.trim();
+    const where: Prisma.AdminChatMessageWhereInput = {
+      AND: [
         { OR: reportTypes.map((name) => ({ text: { startsWith: `[${name}]` } })) },
-        ...(cursor ? [{ OR: [{ createdAt: { lt: cursor.createdAt } }, { createdAt: cursor.createdAt, id: { lt: cursor.id } }] }] : []),
-      ] },
-      include: { conversation: { include: { user: { select: { id: true, role: true, email: true, profile: { select: { displayName: true, avatarUrl: true } } } } } } },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: take + 1,
-    });
-    const hasMore = rows.length > take;
-    const page = rows.slice(0, take);
+        ...(search ? [{ OR: [
+          { text: { contains: search, mode: "insensitive" as const } },
+          { conversation: { user: { email: { contains: search, mode: "insensitive" as const } } } },
+          { conversation: { user: { profile: { is: { displayName: { contains: search, mode: "insensitive" as const } } } } } },
+        ] }] : []),
+      ],
+    };
+    const [rows, total] = await Promise.all([
+      this.prisma.adminChatMessage.findMany({
+        where,
+        include: {
+          conversation: {
+            include: {
+              user: {
+                select: {
+                  id: true, role: true, email: true,
+                  profile: { select: { displayName: true, avatarUrl: true } },
+                },
+              },
+            },
+          },
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip, take,
+      }),
+      this.prisma.adminChatMessage.count({ where }),
+    ]);
     return {
-      items: page.map((item) => {
+      items: rows.map((item) => {
         const typeName = reportTypes.find((name) => item.text.startsWith(`[${name}]`)) ?? "Feedback";
         const user = item.conversation.user;
         return {
@@ -177,7 +229,7 @@ export class AdminChatService {
           createdAt: item.createdAt.toISOString(),
         };
       }),
-      nextCursor: hasMore ? page.at(-1)?.id ?? null : null,
+      total, take, offset: skip,
     };
   }
 
@@ -220,15 +272,25 @@ export class AdminChatService {
 
   private serializeMessage(message: Message, viewerRole: UserRole) {
     const mine = message.senderRole === viewerRole;
-    return { id: message.id, text: message.text, mine, senderId: message.senderId, senderRole: message.senderRole, senderName: this.senderName(message), clientMessageId: message.clientMessageId, attachments: Array.isArray(message.attachments) ? message.attachments : [], createdAt: message.createdAt.toISOString(), time: message.createdAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), status: mine ? message.readAt ? "seen" : "delivered" : "delivered", readAt: message.readAt?.toISOString() ?? null };
+    return { id: message.id, text: message.text, mine, senderId: message.senderId, senderRole: message.senderRole, senderName: this.senderName(message), clientMessageId: message.clientMessageId, attachments: Array.isArray(message.attachments) ? message.attachments : [], replyToId: message.replyToId ?? undefined, replyTo: message.replyTo ? { author: message.replyTo.senderRole === UserRole.ADMIN ? "Brandly" : message.replyTo.senderRole === viewerRole ? "You" : message.replyTo.sender.profile?.displayName || "User", text: message.replyTo.text.trim() || this.attachmentPreview(message.replyTo.attachments) || "Attachment" } : undefined, createdAt: message.createdAt.toISOString(), time: message.createdAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), status: mine ? message.readAt ? "seen" : "delivered" : "delivered", readAt: message.readAt?.toISOString() ?? null };
   }
 
   private senderName(message: Message) { return message.senderRole === UserRole.ADMIN ? "Brandly" : message.sender.profile?.displayName || "User"; }
-  private normalizeAttachments(items?: Record<string, unknown>[]) {
+  private normalizeAttachments(items?: Record<string, unknown>[], allowSocialReview = false) {
     if (items && items.length > MAX_ADMIN_CHAT_ATTACHMENTS) throw new BadRequestException(`Send at most ${MAX_ADMIN_CHAT_ATTACHMENTS} attachments per message`);
     return (items ?? []).map((item) => {
       const id = typeof item.id === "string" ? item.id.slice(0, 120) : randomUUID();
       const name = typeof item.name === "string" ? item.name.slice(0, 180) : "Attachment";
+      if (item.type === "social-review") {
+        if (!allowSocialReview || typeof item.accountId !== "string" || !isUUID(item.accountId)
+          || typeof item.platform !== "string" || !item.platform.trim() || item.platform.length > 40
+          || typeof item.handle !== "string" || !item.handle.trim() || item.handle.length > 120
+          || !["profile", "post", "video", "story"].includes(String(item.contentType))
+          || typeof item.contentUrl !== "string" || item.contentUrl.length > 2_000 || !/^https?:\/\//i.test(item.contentUrl)) {
+          throw new BadRequestException("Invalid social account review card");
+        }
+        return { id, name, type: "social-review", accountId: item.accountId, platform: item.platform, handle: item.handle, contentType: item.contentType, contentUrl: item.contentUrl };
+      }
       const type = item.type === "image" || item.type === "video" || item.type === "file" ? item.type : null;
       const uri = typeof item.uri === "string" ? item.uri : "";
       if (!type || !uri || !/^https?:\/\//i.test(uri)) throw new BadRequestException("Each attachment must be an uploaded file URL");

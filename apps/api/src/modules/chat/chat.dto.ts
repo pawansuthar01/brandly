@@ -71,6 +71,10 @@ export class AdminChatMessageDto {
   @ArrayMaxSize(12)
   @IsObject({ each: true })
   attachments?: Record<string, unknown>[];
+
+  @IsOptional()
+  @IsUUID("4")
+  replyToId?: string;
 }
 
 export class AdminChatHeartbeatDto {

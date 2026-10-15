@@ -21,7 +21,7 @@ import { ProposalCard } from "../../components/marketplace";
 import { useDemoMarketplace } from "../../hooks/useDemoMarketplace";
 import { useTheme } from "../../providers/ThemeProvider";
 import type { Campaign, DemoProposal } from "../../types/marketplace";
-import { isPublishedCampaign } from "../../lib/marketplace";
+import { isPublishedCampaign, parseCampaignBudgetValue } from "../../lib/marketplace";
 import {
   DEFAULT_CAMPAIGN_FILTERS,
   formatIncome,
@@ -127,20 +127,20 @@ export function CampaignsView({
   );
   const counts = useMemo(
     () => ({
-      active: visibleCampaigns.filter((item) => item.status === "Open" || item.status === "Published").length,
-      progress: visibleCampaigns.filter(
+      active: campaigns.filter((item) => item.status === "Open" || item.status === "Published").length,
+      progress: campaigns.filter(
         (item) => item.status === "Proposal sent" || item.status === "Accepted",
       ).length,
-      closed: visibleCampaigns.filter((item) => item.status === "Completed").length,
+      closed: campaigns.filter((item) => item.status === "Completed" || item.status === "Closed").length,
     }),
-    [visibleCampaigns],
+    [campaigns],
   );
-  const totalIncome = useMemo(
+  const totalCampaignValue = useMemo(
     () =>
-      proposals
-        .filter((proposal) => proposal.status === "Accepted" || proposal.status === "Completed")
-        .reduce((total, proposal) => total + getAmount(proposal.amount), 0),
-    [proposals],
+      campaigns
+        .filter((campaign) => campaign.status !== "Archived")
+        .reduce((total, campaign) => total + parseCampaignBudgetValue(campaign.budget), 0),
+    [campaigns],
   );
   const resetFilters = () => setFilters(DEFAULT_CAMPAIGN_FILTERS);
   const railCardWidth = Math.min(
@@ -218,10 +218,10 @@ export function CampaignsView({
             accessibilityLabel="Search brand campaigns"
           />
           <View style={styles.campaignStatsGrid}>
-            <Stat label="Open" value={`${counts.active}`} icon="megaphone-outline" centered style={styles.campaignStat} />
-            <Stat label="In progress" value={`${counts.progress}`} icon="time-outline" centered style={styles.campaignStat} />
-            <Stat label="Closed" value={`${counts.closed}`} icon="checkmark-circle-outline" centered style={styles.campaignStat} />
-            <Stat label="Total value" value={formatIncome(totalIncome)} icon="wallet-outline" centered style={styles.campaignStat} />
+            <Stat label="Open" value={`${counts.active}`} icon="megaphone-outline" centered style={[styles.campaignStat, styles.campaignStatSky]} />
+            <Stat label="In progress" value={`${counts.progress}`} icon="time-outline" centered style={[styles.campaignStat, styles.campaignStatMint]} />
+            <Stat label="Closed" value={`${counts.closed}`} icon="checkmark-circle-outline" centered style={[styles.campaignStat, styles.campaignStatButter]} />
+            <Stat label="Total value" value={formatIncome(totalCampaignValue)} icon="wallet-outline" centered style={[styles.campaignStat, styles.campaignStatLilac]} />
           </View>
           <View style={styles.campaignFilterHeader}>
             <View>

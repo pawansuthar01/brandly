@@ -221,6 +221,7 @@ export class SocialProfileSyncService implements OnModuleInit, OnModuleDestroy {
           syncStatus: matches ? "SYNCED" : "FAILED",
           syncError: matches ? null : snapshot.displayName ? "Public profile name does not match your Brandly profile name." : "Public profile name was not available on this page.",
           lastSyncedAt: new Date(),
+          followerCountVerifiedAt: null,
           verificationMethod: matches ? "PUBLIC_PROFILE_MATCH" : null,
           verificationStatus: matches ? "VERIFIED" : "PENDING",
           verifiedAt: matches ? new Date() : null,
@@ -280,6 +281,7 @@ export class SocialProfileSyncService implements OnModuleInit, OnModuleDestroy {
         syncStatus: "FAILED",
         syncError: message.slice(0, 500),
         lastSyncedAt: new Date(),
+        followerCountVerifiedAt: null,
         verificationStatus: "PENDING",
       },
     }).catch(() => null);

@@ -1,4 +1,11 @@
-import { ArrayMaxSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsObject, IsOptional, IsString, IsUUID, MaxLength, MinLength } from "class-validator";
+import { ArrayMaxSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsObject, IsOptional, IsString, IsUUID, Matches, MaxLength, MinLength } from "class-validator";
+
+export class NotificationPreferencesDto {
+  @IsBoolean() messages!: boolean;
+  @IsBoolean() profileActivity!: boolean;
+  @IsBoolean() proposalUpdates!: boolean;
+  @IsBoolean() taskUpdates!: boolean;
+}
 
 export class RegisterDeviceDto {
   @IsString()
@@ -46,8 +53,8 @@ export class CreateNotificationDto {
 
   @IsOptional()
   @IsArray()
-  @IsIn(["PUSH", "WHATSAPP", "EMAIL"], { each: true })
-  channels?: Array<"PUSH" | "WHATSAPP" | "EMAIL">;
+  @IsIn(["IN_APP", "PUSH", "WHATSAPP", "EMAIL"], { each: true })
+  channels?: Array<"IN_APP" | "PUSH" | "WHATSAPP" | "EMAIL">;
 }
 
 export class AdminNotificationDto {
@@ -77,6 +84,26 @@ export class AdminNotificationDto {
 
   @IsOptional()
   @IsArray()
-  @IsIn(["PUSH", "WHATSAPP", "EMAIL"], { each: true })
-  channels?: Array<"PUSH" | "WHATSAPP" | "EMAIL">;
+  @IsIn(["IN_APP", "PUSH", "WHATSAPP", "EMAIL"], { each: true })
+  channels?: Array<"IN_APP" | "PUSH" | "WHATSAPP" | "EMAIL">;
+}
+
+export class AdminNotificationLogsQueryDto {
+  @IsOptional() @IsString() @Matches(/^\d{1,3}$/)
+  take?: string;
+
+  @IsOptional() @IsString() @Matches(/^\d{1,9}$/)
+  offset?: string;
+
+  @IsOptional() @IsString() @MaxLength(120)
+  search?: string;
+
+  @IsOptional() @IsString() @MaxLength(80)
+  type?: string;
+
+  @IsOptional() @IsIn(["App", "Admin"])
+  source?: "App" | "Admin";
+
+  @IsOptional() @IsIn(["IN_APP", "PUSH", "EMAIL", "WHATSAPP"])
+  channel?: "IN_APP" | "PUSH" | "EMAIL" | "WHATSAPP";
 }

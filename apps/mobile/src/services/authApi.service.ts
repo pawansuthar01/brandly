@@ -154,7 +154,8 @@ export type RemoteChatSnapshot = {
   participant: { id: string; name: string; avatarUrl?: string | null; online: boolean };
   messages: RemoteChatMessage[];
 };
-export type RemoteAdminChatMessage = { id: string; text: string; mine: boolean; senderId: string; senderRole: "ADMIN" | "BRAND" | "CREATOR"; senderName: string; clientMessageId?: string | null; attachments?: Array<{ id: string; name: string; type: "image" | "video" | "file"; uri: string }>; createdAt: string; time: string; status: "delivered" | "seen"; readAt: string | null };
+export type RemoteAdminChatAttachment = { id: string; name: string; type: "image" | "video" | "file"; uri: string } | { id: string; name: string; type: "social-review"; accountId: string; platform: string; handle: string; contentType: string; contentUrl: string };
+export type RemoteAdminChatMessage = { id: string; text: string; mine: boolean; senderId: string; senderRole: "ADMIN" | "BRAND" | "CREATOR"; senderName: string; clientMessageId?: string | null; attachments?: RemoteAdminChatAttachment[]; replyToId?: string; replyTo?: { author: string; text: string }; createdAt: string; time: string; status: "delivered" | "seen"; readAt: string | null };
 export type RemoteAdminChatConversation = { id: string; conversationId: string; participant: { id: string; name: "Brandly"; role: string; avatarUrl: null }; online: boolean; preview?: string; updatedAt?: string; unreadCount?: number };
 export type RemoteAdminChatSnapshot = RemoteAdminChatConversation & { messages: RemoteAdminChatMessage[]; hasMore: boolean; nextCursor?: string };
 
@@ -615,6 +616,21 @@ export async function getRemoteNotifications() {
   return authenticatedRequest<Array<{ id: string; type: string; title: string; body: string; data?: Record<string, string>; readAt?: string | null; createdAt?: string }>>("/notifications", { method: "GET" });
 }
 
+export type RemoteNotificationPreferences = {
+  messages: boolean;
+  profileActivity: boolean;
+  proposalUpdates: boolean;
+  taskUpdates: boolean;
+};
+
+export async function getRemoteNotificationPreferences(): Promise<RemoteNotificationPreferences> {
+  return authenticatedRequest<RemoteNotificationPreferences>("/notifications/preferences", { method: "GET" });
+}
+
+export async function saveRemoteNotificationPreferences(preferences: RemoteNotificationPreferences): Promise<RemoteNotificationPreferences> {
+  return authenticatedRequest<RemoteNotificationPreferences>("/notifications/preferences", { method: "PATCH", body: JSON.stringify(preferences) });
+}
+
 export async function markRemoteNotificationRead(id: string) {
   return authenticatedRequest(`/notifications/${encodeURIComponent(id)}/read`, { method: "PATCH", body: JSON.stringify({}) });
 }
@@ -650,8 +666,8 @@ export async function openRemoteAdminChatConversation(): Promise<RemoteAdminChat
 export async function getRemoteAdminChatMessages(conversationId: string, before?: string): Promise<RemoteAdminChatSnapshot> {
   return chatGet<RemoteAdminChatSnapshot>(`/chat/admin/conversations/${encodeURIComponent(conversationId)}/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`);
 }
-export async function sendRemoteAdminChatMessage(conversationId: string, text: string, clientMessageId: string, attachments?: RemoteAdminChatMessage["attachments"]): Promise<RemoteAdminChatMessage> {
-  return authenticatedRequest<RemoteAdminChatMessage>(`/chat/admin/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", body: JSON.stringify({ text, clientMessageId, attachments }) });
+export async function sendRemoteAdminChatMessage(conversationId: string, text: string, clientMessageId: string, attachments?: RemoteAdminChatMessage["attachments"], replyToId?: string): Promise<RemoteAdminChatMessage> {
+  return authenticatedRequest<RemoteAdminChatMessage>(`/chat/admin/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", body: JSON.stringify({ text, clientMessageId, attachments, replyToId }) });
 }
 export async function markRemoteAdminChatRead(conversationId: string): Promise<void> {
   await authenticatedRequest(`/chat/admin/conversations/${encodeURIComponent(conversationId)}/read`, { method: "POST", body: "{}" });
@@ -781,6 +797,7 @@ const campaignPayload = async (input: RemoteCampaignInput) => {
     media: await persistCampaignMedia(input.media),
     collaborationVideoUrl: input.collaborationVideoUrl ?? "",
     collaborationVideoLabel: input.collaborationVideoLabel ?? "",
+    ...(input.minimumFollowers !== undefined ? { minimumFollowers: input.minimumFollowers } : {}),
     ...(hasApplicationLimit ? { applicationLimit: input.applicationLimit, closeOnApplicationLimit: input.closeOnApplicationLimit ?? true } : {}),
     ...(hasApprovalLimit ? { approvalLimit: input.approvalLimit, closeOnApprovalLimit: input.closeOnApprovalLimit ?? true } : {}),
     ...(input.visibility ? { visibility: input.visibility } : {}),
